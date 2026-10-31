@@ -4,11 +4,13 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -18,18 +20,36 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.concurrent.thread
 import kotlin.math.*
 import kotlin.random.Random
+
+// --- TEENAGE ENGINEERING FARBPALETTE ---
+val TeChassis = Color(0xFFD8D6D0)      // Eloxiertes Aluminium / Warmes Grau
+val TePanelDark = Color(0xFF191919)    // Tiefschwarz (Display & Gehäuse-Rahmen)
+val TeKeyDark = Color(0xFF2B2B2B)      // Dunkelgraue Funktionstasten
+val TeKeyDarkShadow = Color(0xFF121212)
+val TeKeyLight = Color(0xFFF4F3EF)     // Cremeweiße Haupttasten
+val TeKeyLightShadow = Color(0xFFA6A49E)
+val TeOrange = Color(0xFFFF4F00)       // International Orange (TE Signature)
+val TeOrangeShadow = Color(0xFFB33600)
+val TeOchre = Color(0xFFE5A93C)        // Ocker / Gelb-Akzent
+val TeBlue = Color(0xFF1473E6)         // Technisches Blau
+val TeLedRed = Color(0xFFFF2A2A)       // Rote Status-LED
+val TeLedOff = Color(0xFF4A4946)       // Ausgeschaltete LED
 
 class MainActivity : ComponentActivity() {
     private val synth = HiChordEngine()
@@ -38,8 +58,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         synth.start()
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                HiChordScreen(synth)
+            MaterialTheme {
+                TeHiChordScreen(synth)
             }
         }
     }
@@ -50,6 +70,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// --- 4-STIMMIGE ECHTZEIT-SYNTHESE-ENGINE ---
 class HiChordEngine {
     private val sampleRate = 44100
     @Volatile var isRunning = false
@@ -105,7 +126,7 @@ class HiChordEngine {
             var drumStep = 0
 
             while (isRunning) {
-                val cutoff = (0.18f + (joystickY + 1f) * 0.38f).coerceIn(0.03f, 0.96f)
+                val cutoff = (0.20f + (joystickY + 1f) * 0.38f).coerceIn(0.03f, 0.96f)
                 val arpSamples = sampleRate / 9
 
                 for (i in buffer.indices) {
@@ -181,6 +202,7 @@ class HiChordEngine {
     }
 }
 
+// --- MUSIKTHEORIE & VOICING ---
 val rootNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 val majorScaleOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
 val defaultQuality = intArrayOf(0, 1, 1, 0, 0, 1, 2)
@@ -228,22 +250,23 @@ fun buildChord(
     val freqs = FloatArray(4) { i -> midiToFreq(rootMidi + intervals[i]) }
 
     val suffix = buildString {
-        if (sus4) append("sus4")
+        if (sus4) append("SUS4")
         else if (quality == 1) append("m")
-        else if (quality == 2) append("dim")
-        if (add7th) append(if (quality == 0 && !sus4) "maj7" else "7")
-        if (joystickX > 0.35f) append(" (Inv)")
-        if (joystickX < -0.35f) append(" (Bass)")
+        else if (quality == 2) append("DIM")
+        if (add7th) append(if (quality == 0 && !sus4) "MAJ7" else "7")
     }
 
     return "$noteName$suffix" to freqs
 }
 
+// --- TEENAGE ENGINEERING UI SCREEN ---
 @Composable
-fun HiChordScreen(synth: HiChordEngine) {
+fun TeHiChordScreen(synth: HiChordEngine) {
+    val view = LocalView.current
+
     var keyIndex by remember { mutableIntStateOf(0) }
     var activeDegree by remember { mutableIntStateOf(-1) }
-    var displayChord by remember { mutableStateOf("READY") }
+    var displayChord by remember { mutableStateOf("HI-CHORD") }
 
     var modFlip by remember { mutableStateOf(false) }
     var mod7th by remember { mutableStateOf(false) }
@@ -257,8 +280,9 @@ fun HiChordScreen(synth: HiChordEngine) {
     var joyX by remember { mutableFloatStateOf(0f) }
     var joyY by remember { mutableFloatStateOf(0f) }
 
-    val waveNames = listOf("SAW", "SQR", "SUB", "SUPERSAW")
+    val waveNames = listOf("SAW", "PULS", "SINE", "SSAW")
     val romanDegrees = listOf("I", "ii", "iii", "IV", "V", "vi", "vii°")
+    val degreeSubLabels = listOf("TONIC", "SUPER", "MEDI", "SUBD", "DOM", "SUBM", "LEAD")
 
     LaunchedEffect(activeDegree, keyIndex, modFlip, mod7th, modSus4, octaveShift, joyX) {
         if (activeDegree in 0..6) {
@@ -282,194 +306,412 @@ fun HiChordScreen(synth: HiChordEngine) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF18181A))
-            .padding(16.dp),
+            .background(TeChassis)
+            .padding(14.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        // 1. HARDWARE HEADER MIT MODELLBEZEICHNUNG & SCHRAUBEN-DETAILS
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ScrewHead()
+                Text(
+                    text = "TE // HC-01 CHORD SYNTHESIZER",
+                    color = TePanelDark,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SpeakerGrille()
+                ScrewHead()
+            }
+        }
+
+        // 2. DISPLAY-SEKTION & X/Y-VEKTOR-JOYSTICK
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(150.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .height(155.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // TE Vektor-OLED Display
             Box(
                 modifier = Modifier
-                    .weight(1.3f)
+                    .weight(1.35f)
                     .fillMaxHeight()
-                    .background(Color(0xFF070B0C), RoundedCornerShape(10.dp))
-                    .border(2.dp, Color(0xFF34383B), RoundedCornerShape(10.dp))
-                    .padding(12.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(TePanelDark)
+                    .border(2.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp))
+                    .padding(10.dp)
             ) {
-                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                // Hintergrund-Punktmatrix im Display
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val cols = 16
+                    val rows = 8
+                    val stepX = size.width / cols
+                    val stepY = size.height / rows
+                    for (c in 1 until cols) {
+                        for (r in 1 until rows) {
+                            drawCircle(
+                                color = Color(0xFF2C2C2A),
+                                radius = 1.5f,
+                                center = Offset(c * stepX, r * stepY)
+                            )
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Display Top-Statusleiste
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "KEY: ${rootNames[keyIndex]} MAJ",
-                            color = Color(0xFF00E5FF),
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
+                        DisplayBadge(text = "KEY ${rootNames[keyIndex]}", bgColor = TeOrange, textColor = Color.White)
+                        DisplayBadge(text = waveNames[waveIndex], bgColor = Color(0xFF333333), textColor = TeOchre)
+                        DisplayBadge(
+                            text = "OCT ${if (octaveShift >= 0) "+$octaveShift" else octaveShift}",
+                            bgColor = Color(0xFF333333),
+                            textColor = Color.White
                         )
+                    }
+
+                    // Haupt-Akkord-Anzeige + Voicing-Status
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        Column {
+                            Text(
+                                text = if (activeDegree >= 0) "DEGREE ${romanDegrees[activeDegree]}" else "STANDBY",
+                                color = Color(0xFF888884),
+                                fontSize = 9.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Text(
+                                text = displayChord,
+                                color = Color(0xFFF4F3EF),
+                                fontSize = 28.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        val voicingText = when {
+                            joyX < -0.35f -> "BASS DROP"
+                            joyX > 0.7f -> "INV 2"
+                            joyX > 0.35f -> "INV 1"
+                            else -> "ROOT"
+                        }
                         Text(
-                            text = "${waveNames[waveIndex]} | OCT:${if (octaveShift >= 0) "+$octaveShift" else octaveShift}",
-                            color = Color(0xFFFF9100),
-                            fontSize = 12.sp,
+                            text = voicingText,
+                            color = TeOrange,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
                         )
                     }
 
-                    Text(
-                        text = displayChord,
-                        color = Color.White,
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-
-                    Canvas(modifier = Modifier.fillMaxWidth().height(36.dp)) {
+                    // Zweifarbiges Oszilloskop
+                    Canvas(modifier = Modifier.fillMaxWidth().height(34.dp)) {
                         val tick = frameTick
                         val path = Path()
                         val stepX = size.width / synth.scopeBuffer.size
                         val midY = size.height / 2f
+                        drawLine(Color(0xFF333333), Offset(0f, midY), Offset(size.width, midY), strokeWidth = 1f)
                         for (i in synth.scopeBuffer.indices) {
                             val x = i * stepX
-                            val y = midY - (synth.scopeBuffer[i] * midY * 0.9f)
+                            val y = midY - (synth.scopeBuffer[i] * midY * 0.95f)
                             if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                         }
-                        drawPath(path, color = Color(0xFF00E5FF), style = Stroke(width = 3f))
+                        drawPath(
+                            path = path,
+                            color = if (synth.gate) TeOrange else Color(0xFF666662),
+                            style = Stroke(width = 3.5f, cap = StrokeCap.Round)
+                        )
                     }
                 }
             }
 
+            // TE Fadenkreuz-Joystick Modul
             Box(
                 modifier = Modifier
-                    .size(140.dp)
-                    .background(Color(0xFF232428), CircleShape)
-                    .border(3.dp, Color(0xFF3E4047), CircleShape)
+                    .weight(0.9f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFC5C3BC))
+                    .border(2.dp, Color(0xFFABA9A2), RoundedCornerShape(8.dp))
                     .pointerInput(Unit) {
                         detectDragGestures(
                             onDragEnd = {
-                                joyX = 0f
-                                joyY = 0f
-                                synth.joystickX = 0f
-                                synth.joystickY = 0f
+                                joyX = 0f; joyY = 0f
+                                synth.joystickX = 0f; synth.joystickY = 0f
                             },
                             onDragCancel = {
-                                joyX = 0f
-                                joyY = 0f
-                                synth.joystickX = 0f
-                                synth.joystickY = 0f
+                                joyX = 0f; joyY = 0f
+                                synth.joystickX = 0f; synth.joystickY = 0f
                             }
                         ) { change, dragAmount ->
                             change.consume()
-                            val maxRadius = size.width / 2.5f
+                            val maxRadius = size.width / 2.4f
                             val newX = (joyX * maxRadius + dragAmount.x).coerceIn(-maxRadius, maxRadius) / maxRadius
                             val newY = (joyY * maxRadius - dragAmount.y).coerceIn(-maxRadius, maxRadius) / maxRadius
-                            joyX = newX
-                            joyY = newY
-                            synth.joystickX = newX
-                            synth.joystickY = newY
+                            joyX = newX; joyY = newY
+                            synth.joystickX = newX; synth.joystickY = newY
                         }
-                    },
+                    }
+                    .padding(6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val center = Offset(size.width / 2f, size.height / 2f)
-                    val maxR = size.width / 3f
+                    val maxR = min(size.width, size.height) / 2.6f
+
+                    // Technische Skalenringe & Fadenkreuz
+                    drawCircle(Color(0xFF9E9C95), radius = maxR, style = Stroke(width = 2f))
+                    drawCircle(Color(0xFF9E9C95), radius = maxR * 0.5f, style = Stroke(width = 1f))
+                    drawLine(Color(0xFF9E9C95), Offset(center.x - maxR, center.y), Offset(center.x + maxR, center.y), 1.5f)
+                    drawLine(Color(0xFF9E9C95), Offset(center.x, center.y - maxR), Offset(center.x, center.y + maxR), 1.5f)
+
                     val knobPos = Offset(center.x + joyX * maxR, center.y - joyY * maxR)
-                    drawLine(Color(0xFF555555), center, knobPos, strokeWidth = 8f)
-                    drawCircle(Color(0xFFFF5722), radius = 24.dp.toPx(), center = knobPos)
+                    // Geber-Achse
+                    drawLine(TePanelDark, center, knobPos, strokeWidth = 6f, cap = StrokeCap.Round)
+                    // Oranger Encoder-Knopf mit weißem Mittelpunkt
+                    drawCircle(TeOrange, radius = 18.dp.toPx(), center = knobPos)
+                    drawCircle(Color.White, radius = 5.dp.toPx(), center = knobPos)
                 }
                 Text(
-                    text = "FILTER / INV",
-                    color = Color.Gray,
+                    text = "Y:LPF  X:INV",
+                    color = TePanelDark,
                     fontSize = 9.sp,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp)
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
         }
 
+        // 3. PARAMETER- & SOUND-SEKTION (RUNDE FUNKTIONSTASTEN)
+        SectionDivider("PARAMETER // ENGINE")
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            SmallControlBtn("KEY -", Modifier.weight(1f)) { keyIndex = (keyIndex + 11) % 12 }
-            SmallControlBtn("KEY +", Modifier.weight(1f)) { keyIndex = (keyIndex + 1) % 12 }
-            SmallControlBtn("WAVE", Modifier.weight(1f)) {
-                waveIndex = (waveIndex + 1) % 4
-                synth.waveform = waveIndex
-            }
-            SmallControlBtn(if (arpOn) "ARP: ON" else "ARP: OFF", Modifier.weight(1f), arpOn) {
-                arpOn = !arpOn
-                synth.arpEnabled = arpOn
-            }
-            SmallControlBtn(if (drumOn) "BEAT: ON" else "BEAT: OFF", Modifier.weight(1f), drumOn) {
-                drumOn = !drumOn
-                synth.drumEnabled = drumOn
-            }
+            TeTactileButton(
+                title = "KEY -",
+                sub = "TRANS",
+                modifier = Modifier.weight(1f),
+                height = 46.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    keyIndex = (keyIndex + 11) % 12
+                }
+            )
+            TeTactileButton(
+                title = "KEY +",
+                sub = "TRANS",
+                modifier = Modifier.weight(1f),
+                height = 46.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    keyIndex = (keyIndex + 1) % 12
+                }
+            )
+            TeTactileButton(
+                title = waveNames[waveIndex],
+                sub = "SYNTH",
+                modifier = Modifier.weight(1f),
+                height = 46.dp,
+                bgColor = TeOchre,
+                shadowColor = Color(0xFFA67621),
+                textColor = TePanelDark,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    waveIndex = (waveIndex + 1) % 4
+                    synth.waveform = waveIndex
+                }
+            )
+            TeTactileButton(
+                title = "ARP",
+                sub = "1/16",
+                modifier = Modifier.weight(1f),
+                height = 46.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = arpOn,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    arpOn = !arpOn
+                    synth.arpEnabled = arpOn
+                }
+            )
+            TeTactileButton(
+                title = "PO-BEAT",
+                sub = "DRUM",
+                modifier = Modifier.weight(1f),
+                height = 46.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = drumOn,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    drumOn = !drumOn
+                    synth.drumEnabled = drumOn
+                }
+            )
         }
 
-        Text(
-            text = "CHORD MODIFIERS (TOGGLE / COMBINE)",
-            color = Color(0xFF9E9E9E),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace
-        )
+        // 4. AKKORD-MODIFIKATOREN (MIT STATUS-LEDS)
+        SectionDivider("HARMONIC MODIFIERS // LATCH")
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            ModifierButton("MAJ/MIN", modFlip, Modifier.weight(1f)) { modFlip = !modFlip }
-            ModifierButton("7TH", mod7th, Modifier.weight(1f)) { mod7th = !mod7th }
-            ModifierButton("SUS4", modSus4, Modifier.weight(1f)) { modSus4 = !modSus4 }
-            ModifierButton("OCT -", octaveShift < 0, Modifier.weight(0.8f)) {
-                octaveShift = if (octaveShift == -1) 0 else -1
-            }
-            ModifierButton("OCT +", octaveShift > 0, Modifier.weight(0.8f)) {
-                octaveShift = if (octaveShift == 1) 0 else 1
-            }
+            TeTactileButton(
+                title = "MAJ/MIN",
+                sub = "FLIP",
+                modifier = Modifier.weight(1.1f),
+                height = 54.dp,
+                bgColor = if (modFlip) TeOrange else TeKeyDark,
+                shadowColor = if (modFlip) TeOrangeShadow else TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = modFlip,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    modFlip = !modFlip
+                }
+            )
+            TeTactileButton(
+                title = "7TH",
+                sub = "JAZZ",
+                modifier = Modifier.weight(1f),
+                height = 54.dp,
+                bgColor = if (mod7th) TeOrange else TeKeyDark,
+                shadowColor = if (mod7th) TeOrangeShadow else TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = mod7th,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    mod7th = !mod7th
+                }
+            )
+            TeTactileButton(
+                title = "SUS4",
+                sub = "TENSION",
+                modifier = Modifier.weight(1f),
+                height = 54.dp,
+                bgColor = if (modSus4) TeOrange else TeKeyDark,
+                shadowColor = if (modSus4) TeOrangeShadow else TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = modSus4,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    modSus4 = !modSus4
+                }
+            )
+            TeTactileButton(
+                title = "OCT -",
+                sub = "DOWN",
+                modifier = Modifier.weight(0.85f),
+                height = 54.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = octaveShift < 0,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    octaveShift = if (octaveShift == -1) 0 else -1
+                }
+            )
+            TeTactileButton(
+                title = "OCT +",
+                sub = "UP",
+                modifier = Modifier.weight(0.85f),
+                height = 54.dp,
+                bgColor = TeKeyDark,
+                shadowColor = TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = octaveShift > 0,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    octaveShift = if (octaveShift == 1) 0 else 1
+                }
+            )
         }
 
-        Text(
-            text = "DIATONIC CHORD PAD (HOLD TO PLAY)",
-            color = Color(0xFF9E9E9E),
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace
-        )
+        // 5. DIATONISCHE KLAVIATUR-PADS (STUFEN I - VII)
+        SectionDivider("DIATONIC CHORD TRIGGERS // I - VII")
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // Obere Pad-Reihe (Stufen I - IV)
             Row(
-                modifier = Modifier.fillMaxWidth().height(110.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(108.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 for (deg in 0..3) {
                     val noteLabel = rootNames[(keyIndex + majorScaleOffsets[deg]) % 12]
-                    ChordPadButton(
+                    val qualSuffix = if (defaultQuality[deg] == 1) "m" else ""
+                    TeChordKeycap(
+                        number = "0${deg + 1}",
                         roman = romanDegrees[deg],
-                        note = noteLabel,
+                        subLabel = degreeSubLabels[deg],
+                        note = "$noteLabel$qualSuffix",
                         isPressed = activeDegree == deg,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
-                        onPress = { activeDegree = deg },
+                        onPress = {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            activeDegree = deg
+                        },
                         onRelease = { if (activeDegree == deg) activeDegree = -1 }
                     )
                 }
             }
+            // Untere Pad-Reihe (Stufen V - vii°)
             Row(
-                modifier = Modifier.fillMaxWidth().height(110.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(108.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 for (deg in 4..6) {
                     val noteLabel = rootNames[(keyIndex + majorScaleOffsets[deg]) % 12]
-                    ChordPadButton(
+                    val qualSuffix = when (defaultQuality[deg]) {
+                        1 -> "m"
+                        2 -> "°"
+                        else -> ""
+                    }
+                    TeChordKeycap(
+                        number = "0${deg + 1}",
                         roman = romanDegrees[deg],
-                        note = noteLabel,
+                        subLabel = degreeSubLabels[deg],
+                        note = "$noteLabel$qualSuffix",
                         isPressed = activeDegree == deg,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
-                        onPress = { activeDegree = deg },
+                        onPress = {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            activeDegree = deg
+                        },
                         onRelease = { if (activeDegree == deg) activeDegree = -1 }
                     )
                 }
@@ -478,58 +720,152 @@ fun HiChordScreen(synth: HiChordEngine) {
     }
 }
 
+// --- TE DESIGN-KOMPONENTEN ---
+
 @Composable
-fun SmallControlBtn(label: String, modifier: Modifier, active: Boolean = false, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.height(42.dp),
-        shape = RoundedCornerShape(8.dp),
-        contentPadding = PaddingValues(2.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) Color(0xFF00ACC1) else Color(0xFF2C2E33),
-            contentColor = Color.White
-        )
+fun SectionDivider(title: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(
+            text = title,
+            color = Color(0xFF5A5852),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(1.dp)
+                .background(Color(0xFFB5B3AC))
+        )
     }
 }
 
 @Composable
-fun ModifierButton(label: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.height(54.dp),
-        shape = RoundedCornerShape(10.dp),
-        contentPadding = PaddingValues(4.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) Color(0xFFFF6D00) else Color(0xFF282A2E),
-            contentColor = Color.White
-        )
+fun DisplayBadge(text: String, bgColor: Color, textColor: Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(bgColor)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(
+            text = text,
+            color = textColor,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
     }
 }
 
 @Composable
-fun ChordPadButton(
-    roman: String,
-    note: String,
-    isPressed: Boolean,
-    modifier: Modifier,
-    onPress: () -> Unit,
-    onRelease: () -> Unit
+fun ScrewHead() {
+    Canvas(modifier = Modifier.size(12.dp)) {
+        drawCircle(Color(0xFFA09E97))
+        drawLine(
+            color = Color(0xFF5A5852),
+            start = Offset(size.width * 0.2f, size.height * 0.5f),
+            end = Offset(size.width * 0.8f, size.height * 0.5f),
+            strokeWidth = 2f
+        )
+    }
+}
+
+@Composable
+fun SpeakerGrille() {
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        repeat(6) {
+            Box(
+                modifier = Modifier
+                    .size(4.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF706E68))
+            )
+        }
+    }
+}
+
+@Composable
+fun TeTactileButton(
+    title: String,
+    sub: String,
+    modifier: Modifier = Modifier,
+    height: Dp = 48.dp,
+    bgColor: Color,
+    shadowColor: Color,
+    textColor: Color,
+    ledOn: Boolean? = null,
+    onClick: () -> Unit
 ) {
     Box(
         modifier = modifier
-            .background(
-                if (isPressed) Color(0xFF00E5FF) else Color(0xFFD6D7DC),
-                RoundedCornerShape(12.dp)
-            )
-            .border(
-                width = 3.dp,
-                color = if (isPressed) Color.White else Color(0xFF8E9099),
-                shape = RoundedCornerShape(12.dp)
-            )
+            .height(height)
+            .clip(RoundedCornerShape(7.dp))
+            .background(shadowColor)
+            .clickable { onClick() }
+            .padding(bottom = 3.dp) // 3D-Tastenhub-Schatten
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(6.dp))
+                .background(bgColor)
+                .padding(horizontal = 6.dp, vertical = 4.dp)
+        ) {
+            if (ledOn != null) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(if (ledOn) TeLedRed else TeLedOff)
+                        .align(Alignment.TopEnd)
+                )
+            }
+            Column(
+                modifier = Modifier.align(Alignment.BottomStart)
+            ) {
+                Text(
+                    text = sub,
+                    color = textColor.copy(alpha = 0.65f),
+                    fontSize = 8.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = title,
+                    color = textColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TeChordKeycap(
+    number: String,
+    roman: String,
+    subLabel: String,
+    note: String,
+    isPressed: Boolean,
+    modifier: Modifier = Modifier,
+    onPress: () -> Unit,
+    onRelease: () -> Unit
+) {
+    val topPadding = if (isPressed) 4.dp else 0.dp
+    val bottomDepth = if (isPressed) 1.dp else 5.dp
+
+    Box(
+        modifier = modifier
+            .padding(top = topPadding)
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (isPressed) TeOrangeShadow else TeKeyLightShadow)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onPress = {
@@ -539,23 +875,55 @@ fun ChordPadButton(
                     }
                 )
             }
-            .padding(10.dp)
+            .padding(bottom = bottomDepth)
     ) {
-        Text(
-            text = roman,
-            color = Color(0xFF18181A),
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.align(Alignment.TopStart)
-        )
-        Text(
-            text = note,
-            color = Color(0xFF18181A),
-            fontSize = 24.sp,
-            fontWeight = FontWeight.ExtraBold,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.align(Alignment.BottomEnd)
-        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isPressed) TeOrange else TeKeyLight)
+                .border(
+                    width = 1.dp,
+                    color = if (isPressed) Color.White else Color(0xFFE2E0D8),
+                    shape = RoundedCornerShape(8.dp)
+                )
+                .padding(8.dp)
+        ) {
+            // Oben links: Technische Nummer + Römische Stufe
+            Column(modifier = Modifier.align(Alignment.TopStart)) {
+                Text(
+                    text = "$number // $roman",
+                    color = if (isPressed) Color.White else Color(0xFF6E6D68),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = subLabel,
+                    color = if (isPressed) Color.White.copy(alpha = 0.8f) else Color(0xFF9E9C95),
+                    fontSize = 8.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            // Oben rechts: Status-LED
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(if (isPressed) Color.White else TeLedOff.copy(alpha = 0.35f))
+                    .align(Alignment.TopEnd)
+            )
+
+            // Unten rechts: Große Akkord-Note
+            Text(
+                text = note,
+                color = if (isPressed) Color.White else TePanelDark,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.align(Alignment.BottomEnd)
+            )
+        }
     }
 }
