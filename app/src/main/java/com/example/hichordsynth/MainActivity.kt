@@ -50,15 +50,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- 4-STIMMIGE ECHTZEIT-AUDIO-ENGINE ---
 class HiChordEngine {
     private val sampleRate = 44100
     @Volatile var isRunning = false
     @Volatile var activeFreqs = FloatArray(4) { 0f }
     @Volatile var gate = false
-    @Volatile var waveform = 0 // 0: Saw, 1: Square, 2: Warm Tri, 3: Detuned SuperSaw
-    @Volatile var joystickX = 0f // -1f..1f -> Voicing / Inversion
-    @Volatile var joystickY = 0f // -1f..1f -> Low-Pass Filter Cutoff
+    @Volatile var waveform = 0
+    @Volatile var joystickX = 0f
+    @Volatile var joystickY = 0f
     @Volatile var arpEnabled = false
     @Volatile var drumEnabled = false
 
@@ -106,14 +105,12 @@ class HiChordEngine {
             var drumStep = 0
 
             while (isRunning) {
-                // Cutoff-Steuerung über Joystick Y-Achse
                 val cutoff = (0.18f + (joystickY + 1f) * 0.38f).coerceIn(0.03f, 0.96f)
-                val arpSamples = sampleRate / 9 // 16tel-Arpeggiator
+                val arpSamples = sampleRate / 9
 
                 for (i in buffer.indices) {
                     sampleCounter++
 
-                    // Arpeggiator & Pocket-Drum-Clock
                     if (sampleCounter >= arpSamples) {
                         sampleCounter = 0
                         arpIndex = (arpIndex + 1) % 4
@@ -124,7 +121,6 @@ class HiChordEngine {
                         }
                     }
 
-                    // Sanftes Attack & Release (Envelope)
                     env = if (gate) {
                         (env + 0.004f).coerceAtMost(1f)
                     } else {
@@ -144,20 +140,18 @@ class HiChordEngine {
                             val p2 = phasesDetune[v]
 
                             val osc = when (waveform) {
-                                0 -> (p * 2f) - 1f // Classic Saw
-                                1 -> if (p < 0.5f) 0.8f else -0.8f // Pulse / Square
-                                2 -> sin(p * 2f * PI.toFloat()) // Warm Sine/Sub
-                                else -> (((p * 2f) - 1f) + ((p2 * 2f) - 1f)) * 0.55f // Chorus SuperSaw
+                                0 -> (p * 2f) - 1f
+                                1 -> if (p < 0.5f) 0.8f else -0.8f
+                                2 -> sin(p * 2f * PI.toFloat())
+                                else -> (((p * 2f) - 1f) + ((p2 * 2f) - 1f)) * 0.55f
                             }
                             chordMix += osc * 0.22f
                         }
                     }
 
-                    // Einpoliger Tiefpassfilter (gesteuert durch Joystick Y)
                     lpState += cutoff * (chordMix * env - lpState)
                     var finalSample = lpState
 
-                    // Begleit-Drums (Kick auf 0 & 4, Hi-Hat auf 2)
                     if (drumEnabled && drumEnv > 0.001f) {
                         if (drumStep == 2) {
                             val noise = (Random.nextFloat() * 2f - 1f) * drumEnv * 0.2f
@@ -187,11 +181,9 @@ class HiChordEngine {
     }
 }
 
-// --- MUSIKTHEORIE & DIATONISCHE AKKORDBERECHNUNG ---
 val rootNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 val majorScaleOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
-// Diatonische Grundgeschlechter: I=Maj, ii=min, iii=min, IV=Maj, V=Maj, vi=min, vii°=dim
-val defaultQuality = intArrayOf(0, 1, 1, 0, 0, 1, 2) // 0: Maj, 1: Min, 2: Dim
+val defaultQuality = intArrayOf(0, 1, 1, 0, 0, 1, 2)
 
 fun midiToFreq(midi: Int): Float = 440f * 2f.pow((midi - 69) / 12f)
 
@@ -219,14 +211,13 @@ fun buildChord(
     }
     val fifth = if (quality == 2 && !flipMajMin) 6 else 7
     val seventh = when {
-        !add7th -> 12 // Oktav-Dopplung wenn kein 7th aktiv
-        quality == 0 -> 11 // Major 7
-        else -> 10 // Dominant / Minor 7
+        !add7th -> 12
+        quality == 0 -> 11
+        else -> 10
     }
 
     val intervals = intArrayOf(0, third, fifth, seventh)
 
-    // Joystick X-Achse steuert Akkord-Voicing / Umkehrungen (-1 = Bass-Drop, +1 = 1./2. Inversion)
     if (joystickX < -0.35f) {
         intervals[0] -= 12
     } else if (joystickX > 0.35f) {
@@ -248,14 +239,12 @@ fun buildChord(
     return "$noteName$suffix" to freqs
 }
 
-// --- HICHORD HARDWARE-UI (JETPACK COMPOSE) ---
 @Composable
 fun HiChordScreen(synth: HiChordEngine) {
-    var keyIndex by remember { mutableIntStateOf(0) } // 0 = C-Dur
+    var keyIndex by remember { mutableIntStateOf(0) }
     var activeDegree by remember { mutableIntStateOf(-1) }
     var displayChord by remember { mutableStateOf("READY") }
 
-    // Echtzeit-Modifier
     var modFlip by remember { mutableStateOf(false) }
     var mod7th by remember { mutableStateOf(false) }
     var modSus4 by remember { mutableStateOf(false) }
@@ -271,7 +260,6 @@ fun HiChordScreen(synth: HiChordEngine) {
     val waveNames = listOf("SAW", "SQR", "SUB", "SUPERSAW")
     val romanDegrees = listOf("I", "ii", "iii", "IV", "V", "vi", "vii°")
 
-    // Aktualisiere Frequenzen sofort bei Parameter- oder Joystick-Änderung
     LaunchedEffect(activeDegree, keyIndex, modFlip, mod7th, modSus4, octaveShift, joyX) {
         if (activeDegree in 0..6) {
             val (name, freqs) = buildChord(keyIndex, activeDegree, modFlip, mod7th, modSus4, octaveShift, joyX)
@@ -283,7 +271,6 @@ fun HiChordScreen(synth: HiChordEngine) {
         }
     }
 
-    // Oszilloskop-Refresh-Takt
     var frameTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -299,7 +286,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             .padding(16.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 1. KOPFBEREICH: OLED-DISPLAY & ANALOG-JOYSTICK
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -307,7 +293,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // OLED Display im Pocket-Synth-Look
             Box(
                 modifier = Modifier
                     .weight(1.3f)
@@ -343,9 +328,8 @@ fun HiChordScreen(synth: HiChordEngine) {
                         fontFamily = FontFamily.Monospace
                     )
 
-                    // Echtzeit-Wellenformanzeige (Oszilloskop)
                     Canvas(modifier = Modifier.fillMaxWidth().height(36.dp)) {
-                        val tick = frameTick // Trigger Redraw
+                        val tick = frameTick
                         val path = Path()
                         val stepX = size.width / synth.scopeBuffer.size
                         val midY = size.height / 2f
@@ -359,7 +343,6 @@ fun HiChordScreen(synth: HiChordEngine) {
                 }
             }
 
-            // Daumen-Joystick (X: Voicing/Inversion, Y: Filter Cutoff)
             Box(
                 modifier = Modifier
                     .size(140.dp)
@@ -408,7 +391,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             }
         }
 
-        // 2. SOUND- & TONART-STEUERUNG (TOP-LEISTE)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -429,7 +411,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             }
         }
 
-        // 3. AKKORD-MODIFIKATOREN (ZUM GEHALTENBLEIBEN ODER TOGGLEN)
         Text(
             text = "CHORD MODIFIERS (TOGGLE / COMBINE)",
             color = Color(0xFF9E9E9E),
@@ -451,7 +432,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             }
         }
 
-        // 4. DIE 7 DIATONISCHEN HICHORD-HAUPTTASTEN (STUFEN I - VII)
         Text(
             text = "DIATONIC CHORD PAD (HOLD TO PLAY)",
             color = Color(0xFF9E9E9E),
@@ -462,7 +442,6 @@ fun HiChordScreen(synth: HiChordEngine) {
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Obere Reihe: I, ii, iii, IV
             Row(
                 modifier = Modifier.fillMaxWidth().height(110.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -479,7 +458,6 @@ fun HiChordScreen(synth: HiChordEngine) {
                     )
                 }
             }
-            // Untere Reihe: V, vi, vii°
             Row(
                 modifier = Modifier.fillMaxWidth().height(110.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
