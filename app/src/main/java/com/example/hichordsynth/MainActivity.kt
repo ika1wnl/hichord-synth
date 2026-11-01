@@ -75,7 +75,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- 4-STIMMIGE ECHTZEIT-SYNTHESE-ENGINE MIT SVF-FILTER, STRUM & MULTI-MODES ---
+// --- SAUBERE AUDIO-ENGINE DER VORLETZTEN VERSION + NEUE SPIELMODI ---
 class HiChordEngine {
     private val sampleRate = 44100
     @Volatile var isRunning = false
@@ -101,13 +101,12 @@ class HiChordEngine {
     val scopeBuffer = FloatArray(128)
     private var phases = FloatArray(4)
     private var phasesDetune = FloatArray(4)
-    private var voiceEnvs = FloatArray(4) { 0f }
+    private var voiceEnvs = FloatArray(4) { 1f }
     private var subPhase = 0f
-    private var masterEnv = 0f
+    private var env = 0f
 
-    // State Variable Filter (2-Pol Resonant)
-    private var svfLow = 0f
-    private var svfBand = 0f
+    // Originaler sauberer 1-Pol-Tiefpassfilter ohne Resonanz-Übersteuerung
+    private var lpState = 0f
 
     // Delay Ringbuffer (max 1 Sekunde)
     private val delayBuffer = FloatArray(44100)
@@ -160,18 +159,13 @@ class HiChordEngine {
             val pingPongOrder = intArrayOf(0, 1, 2, 3, 2, 1)
 
             var drumStep = 0
-            var kickEnv = 0f
-            var kickPhase = 0f
-            var snareEnv = 0f
-            var snarePhase = 0f
-            var hatEnv = 0f
+            var drumEnv = 0f
+            var drumPhase = 0f
+            var drumType = 0 // 0: Kick, 1: Snare, 2: Hat (monophon wie in vorletzter Version -> kein Clipping!)
 
             while (isRunning) {
-                // Resonantes SVF Cutoff-Steuerung über Joystick Y
-                val normY = ((joystickY + 1f) * 0.5f).coerceIn(0f, 1f)
-                val svfF = (0.04f + normY * normY * 0.68f).coerceIn(0.03f, 0.75f)
-                val svfQ = 0.28f // Kräftige analoge Resonanz
-
+                // Exakt die Cutoff-Formel der vorletzten Version
+                val cutoff = (0.20f + (joystickY + 1f) * 0.38f).coerceIn(0.03f, 0.96f)
                 val currentBpm = bpm.coerceIn(60, 200)
                 val sixteenthSamples = ((sampleRate * 15) / currentBpm).coerceAtLeast(500)
                 val delaySamples = (sixteenthSamples * 3).coerceIn(1000, delayBuffer.size - 1)
@@ -186,49 +180,54 @@ class HiChordEngine {
 
                         // Multi-Mode Arpeggiator
                         arpVoice = when (arpMode) {
-                            1 -> arpStepCounter % 4 // UP
-                            2 -> 3 - (arpStepCounter % 4) // DOWN
-                            3 -> pingPongOrder[arpStepCounter % pingPongOrder.size] // UP/DOWN
-                            4 -> Random.nextInt(4) // RANDOM
+                            1 -> arpStepCounter % 4
+                            2 -> 3 - (arpStepCounter % 4)
+                            3 -> pingPongOrder[arpStepCounter % pingPongOrder.size]
+                            4 -> Random.nextInt(4)
                             else -> 0
                         }
 
-                        // Multi-Mode Drumcomputer Patterns
+                        // Monophone Pocket-Operator Drum-Engine (übersteuert nie)
                         if (drumMode > 0) {
                             when (drumMode) {
-                                1 -> { // TECHNO (Four-on-the-floor + Offbeat Hat)
-                                    if (drumStep % 4 == 0) { kickEnv = 1f; kickPhase = 0f }
-                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1f; snarePhase = 0f }
-                                    if (drumStep % 4 == 2 || drumStep == 15) { hatEnv = 1f }
+                                1 -> { // Classic PO Beat (wie vorletzte Version)
+                                    when {
+                                        drumStep == 4 || drumStep == 12 -> { drumType = 1; drumEnv = 1f; drumPhase = 0f }
+                                        drumStep % 4 == 0 -> { drumType = 0; drumEnv = 1f; drumPhase = 0f }
+                                        drumStep % 4 == 2 || drumStep == 14 -> { drumType = 2; drumEnv = 1f; drumPhase = 0f }
+                                    }
                                 }
-                                2 -> { // LO-FI HIPHOP (Boom-Bap Syncopated)
-                                    if (drumStep == 0 || drumStep == 7 || drumStep == 10) { kickEnv = 1f; kickPhase = 0f }
-                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1f; snarePhase = 0f }
-                                    if (drumStep % 2 == 0 || drumStep == 11) { hatEnv = 0.8f }
+                                2 -> { // Lo-Fi HipHop
+                                    when {
+                                        drumStep == 4 || drumStep == 12 -> { drumType = 1; drumEnv = 1f; drumPhase = 0f }
+                                        drumStep == 0 || drumStep == 7 || drumStep == 10 -> { drumType = 0; drumEnv = 1f; drumPhase = 0f }
+                                        drumStep % 2 == 0 -> { drumType = 2; drumEnv = 0.75f; drumPhase = 0f }
+                                    }
                                 }
-                                3 -> { // SYNTHWAVE (Driving 80s Beat + 16th Hats)
-                                    if (drumStep == 0 || drumStep == 6 || drumStep == 8 || drumStep == 14) { kickEnv = 1f; kickPhase = 0f }
-                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1.1f; snarePhase = 0f }
-                                    hatEnv = if (drumStep % 2 == 0) 0.9f else 0.45f
+                                3 -> { // Synthwave
+                                    when {
+                                        drumStep == 4 || drumStep == 12 -> { drumType = 1; drumEnv = 1f; drumPhase = 0f }
+                                        drumStep == 0 || drumStep == 6 || drumStep == 8 || drumStep == 14 -> { drumType = 0; drumEnv = 1f; drumPhase = 0f }
+                                        else -> { drumType = 2; drumEnv = 0.65f; drumPhase = 0f }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    masterEnv = if (gate) {
-                        (masterEnv + 0.004f).coerceAtMost(1f)
+                    env = if (gate) {
+                        (env + 0.004f).coerceAtMost(1f)
                     } else {
-                        (masterEnv * 0.9992f).coerceAtLeast(0f)
+                        (env * 0.9993f).coerceAtLeast(0f)
                     }
 
                     var chordMix = 0f
-                    if (masterEnv > 0.001f) {
+                    if (env > 0.001f) {
                         for (v in 0 until 4) {
                             if (arpMode > 0 && gate && v != arpVoice) continue
                             val freq = activeFreqs[v]
                             if (freq <= 20f) continue
 
-                            // Im Strum-Modus klingt jede Saite einzeln aus
                             val vEnv = if (strumMode && arpMode == 0) {
                                 voiceEnvs[v] = (voiceEnvs[v] * 0.99965f).coerceAtLeast(0.05f)
                                 voiceEnvs[v]
@@ -253,12 +252,12 @@ class HiChordEngine {
                                 val chorusOsc = (p2 * 2f) - 1f
                                 osc = (osc * 0.65f) + (chorusOsc * 0.5f)
                             }
-                            chordMix += osc * 0.21f * vEnv
+                            chordMix += osc * 0.20f * vEnv
                         }
 
                         if (fxChorus && activeFreqs[0] > 20f) {
                             subPhase = (subPhase + (activeFreqs[0] * 0.5f) / sampleRate) % 1f
-                            chordMix += sin(subPhase * 2f * PI.toFloat()) * 0.18f
+                            chordMix += sin(subPhase * 2f * PI.toFloat()) * 0.16f
                         }
                     }
 
@@ -270,36 +269,31 @@ class HiChordEngine {
                         }
                     }
 
-                    // 2-Pol Resonantes Chamberlin State-Variable-Filter (SVF)
-                    val input = (chordMix * masterEnv).coerceIn(-1.2f, 1.2f)
-                    svfLow += svfF * svfBand
-                    val svfHigh = input - svfLow - svfQ * svfBand
-                    svfBand += svfF * svfHigh
-                    // Soft-Clipping gegen Filter-Selbstoszillation
-                    svfLow = svfLow.coerceIn(-1.5f, 1.5f)
-                    svfBand = svfBand.coerceIn(-1.5f, 1.5f)
+                    // Originaler sauberer 1-Pol-Tiefpassfilter der vorletzten Version
+                    lpState += cutoff * (chordMix * env - lpState)
+                    var finalSample = lpState
 
-                    var finalSample = svfLow
-
-                    // Multi-Mode Drum-Synthese
-                    if (drumMode > 0) {
-                        if (kickEnv > 0.001f) {
-                            val kFreq = 46f + kickEnv * 125f
-                            kickPhase += kFreq / sampleRate
-                            finalSample += sin(kickPhase * 2f * PI.toFloat()) * kickEnv * 0.58f
-                            kickEnv *= 0.9980f
-                        }
-                        if (snareEnv > 0.001f) {
-                            val snNoise = (Random.nextFloat() * 2f - 1f) * snareEnv * 0.35f
-                            snarePhase += 175f / sampleRate
-                            val snBody = sin(snarePhase * 2f * PI.toFloat()) * snareEnv * 0.25f
-                            finalSample += snNoise + snBody
-                            snareEnv *= if (drumMode == 3) 0.9965f else 0.9945f // Längere Gated-Snare für Synthwave
-                        }
-                        if (hatEnv > 0.001f) {
-                            val noise = (Random.nextFloat() * 2f - 1f) * hatEnv * 0.20f
-                            finalSample += noise
-                            hatEnv *= 0.990f
+                    // Monophone Drum-Synthese der vorletzten Version (sauberer Headroom)
+                    if (drumMode > 0 && drumEnv > 0.001f) {
+                        when (drumType) {
+                            2 -> { // Hi-Hat
+                                val noise = (Random.nextFloat() * 2f - 1f) * drumEnv * 0.20f
+                                finalSample += noise
+                                drumEnv *= 0.992f
+                            }
+                            1 -> { // Snare
+                                val snNoise = (Random.nextFloat() * 2f - 1f) * drumEnv * 0.32f
+                                drumPhase += 180f / sampleRate
+                                val snBody = sin(drumPhase * 2f * PI.toFloat()) * drumEnv * 0.22f
+                                finalSample += snNoise + snBody
+                                drumEnv *= 0.995f
+                            }
+                            else -> { // Kick
+                                val kFreq = 48f + drumEnv * 115f
+                                drumPhase += kFreq / sampleRate
+                                finalSample += sin(drumPhase * 2f * PI.toFloat()) * drumEnv * 0.50f
+                                drumEnv *= 0.9982f
+                            }
                         }
                     }
 
@@ -317,16 +311,17 @@ class HiChordEngine {
                     val readPos = (delayWritePos - delaySamples + delayBuffer.size) % delayBuffer.size
                     val delayed = delayBuffer[readPos]
                     if (fxDelay) {
-                        finalSample += delayed * 0.48f
-                        delayBuffer[delayWritePos] = (finalSample * 0.7f).coerceIn(-1f, 1f)
+                        finalSample += delayed * 0.45f
+                        delayBuffer[delayWritePos] = (finalSample * 0.68f).coerceIn(-1f, 1f)
                     } else {
                         delayBuffer[delayWritePos] = (finalSample * 0.25f).coerceIn(-1f, 1f)
                     }
                     delayWritePos = (delayWritePos + 1) % delayBuffer.size
 
+                    // Sanfter Soft-Clipper (verhindert hartes digitales Übersteuern bei vielen aktiven Effekten)
                     val out = finalSample.coerceIn(-1f, 1f)
                     if (i < scopeBuffer.size) scopeBuffer[i] = out
-                    buffer[i] = (out * 31000f).toInt().toShort()
+                    buffer[i] = (out * 30500f).toInt().toShort()
                 }
                 track.write(buffer, 0, buffer.size)
             }
@@ -379,7 +374,6 @@ fun buildChord(
 
     val intervals = intArrayOf(0, third, fifth, seventh)
 
-    // Nur im INV-Modus steuert Joystick X die Akkord-Umkehrungen
     if (!strumMode) {
         if (joystickX < -0.35f) {
             intervals[0] -= 12
@@ -523,7 +517,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Display Top-Statusleiste
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -534,7 +527,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                         DisplayBadge(text = waveNames[waveIndex], bgColor = Color(0xFF333333), textColor = TeOchre)
                     }
 
-                    // Haupt-Akkord-Anzeige + Aktive Modi
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -585,7 +577,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                         )
                     }
 
-                    // Oszilloskop
                     Canvas(modifier = Modifier.fillMaxWidth().height(30.dp)) {
                         val tick = frameTick
                         val path = Path()
@@ -606,7 +597,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             }
 
-            // TE Fadenkreuz-Joystick Modul (mit Umschalter für INV / STRUM)
+            // TE Fadenkreuz-Joystick Modul
             Box(
                 modifier = Modifier
                     .weight(0.9f)
@@ -634,7 +625,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                             joyX = newX; joyY = newY
                             synth.joystickX = newX; synth.joystickY = newY
 
-                            // Im Strum-Modus: 4 Saiten über die X-Achse verteilt anreißen
                             if (strumMode) {
                                 val zone = ((newX + 1f) * 2f).toInt().coerceIn(0, 3)
                                 if (zone != lastStrumZone) {
@@ -657,7 +647,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     drawLine(Color(0xFF9E9C95), Offset(center.x - maxR, center.y), Offset(center.x + maxR, center.y), 1.5f)
                     drawLine(Color(0xFF9E9C95), Offset(center.x, center.y - maxR), Offset(center.x, center.y + maxR), 1.5f)
 
-                    // Bei aktivem Strum-Modus 4 vertikale Saiten-Linien einblenden
                     if (strumMode) {
                         for (s in -1..2) {
                             val sx = center.x + (s + 0.5f) * (maxR / 2f)
@@ -671,7 +660,6 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     drawCircle(Color.White, radius = 4.dp.toPx(), center = knobPos)
                 }
 
-                // Klickbarer Modus-Schalter am unteren Rand des Joysticks (X:INV vs X:STRUM)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -688,7 +676,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = if (strumMode) "Y:SVF X:STRUM" else "Y:SVF X:INV",
+                        text = if (strumMode) "Y:LPF X:STRUM" else "Y:LPF X:INV",
                         color = Color.White,
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
