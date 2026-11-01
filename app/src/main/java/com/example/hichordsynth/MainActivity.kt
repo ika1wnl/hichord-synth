@@ -11,6 +11,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -27,10 +29,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.concurrent.thread
@@ -71,7 +75,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- 4-STIMMIGE ECHTZEIT-SYNTHESE-ENGINE MIT BPM & PUNCH-IN FX ---
+// --- 4-STIMMIGE ECHTZEIT-SYNTHESE-ENGINE MIT SVF-FILTER, STRUM & MULTI-MODES ---
 class HiChordEngine {
     private val sampleRate = 44100
     @Volatile var isRunning = false
@@ -81,8 +85,12 @@ class HiChordEngine {
     @Volatile var bpm = 120
     @Volatile var joystickX = 0f
     @Volatile var joystickY = 0f
-    @Volatile var arpEnabled = false
-    @Volatile var drumEnabled = false
+    @Volatile var strumMode = false
+
+    // 0: OFF, 1: UP, 2: DOWN, 3: UP/DOWN, 4: RANDOM
+    @Volatile var arpMode = 0
+    // 0: OFF, 1: TECHNO, 2: LO-FI HIPHOP, 3: SYNTHWAVE
+    @Volatile var drumMode = 0
 
     // Punch-In FX Flags
     @Volatile var fxDelay = false
@@ -93,9 +101,13 @@ class HiChordEngine {
     val scopeBuffer = FloatArray(128)
     private var phases = FloatArray(4)
     private var phasesDetune = FloatArray(4)
+    private var voiceEnvs = FloatArray(4) { 0f }
     private var subPhase = 0f
-    private var env = 0f
-    private var lpState = 0f
+    private var masterEnv = 0f
+
+    // State Variable Filter (2-Pol Resonant)
+    private var svfLow = 0f
+    private var svfBand = 0f
 
     // Delay Ringbuffer (max 1 Sekunde)
     private val delayBuffer = FloatArray(44100)
@@ -104,6 +116,12 @@ class HiChordEngine {
     // Bitcrusher Sample-Hold
     private var crushCounter = 0
     private var crushedSample = 0f
+
+    fun triggerStrumVoice(voiceIndex: Int) {
+        if (voiceIndex in 0..3) {
+            voiceEnvs[voiceIndex] = 1.0f
+        }
+    }
 
     fun start() {
         if (isRunning) return
@@ -137,17 +155,25 @@ class HiChordEngine {
             track.play()
 
             var sampleCounter = 0
-            var arpIndex = 0
-            var drumEnv = 0f
-            var drumPhase = 0f
+            var arpStepCounter = 0
+            var arpVoice = 0
+            val pingPongOrder = intArrayOf(0, 1, 2, 3, 2, 1)
+
             var drumStep = 0
+            var kickEnv = 0f
+            var kickPhase = 0f
+            var snareEnv = 0f
+            var snarePhase = 0f
+            var hatEnv = 0f
 
             while (isRunning) {
-                val cutoff = (0.20f + (joystickY + 1f) * 0.38f).coerceIn(0.03f, 0.96f)
+                // Resonantes SVF Cutoff-Steuerung über Joystick Y
+                val normY = ((joystickY + 1f) * 0.5f).coerceIn(0f, 1f)
+                val svfF = (0.04f + normY * normY * 0.68f).coerceIn(0.03f, 0.75f)
+                val svfQ = 0.28f // Kräftige analoge Resonanz
+
                 val currentBpm = bpm.coerceIn(60, 200)
-                // 16tel-Noten-Intervall in Samples: (60 / BPM / 4) * sampleRate
                 val sixteenthSamples = ((sampleRate * 15) / currentBpm).coerceAtLeast(500)
-                // Punktierte 8tel für Delay (3 * 16tel)
                 val delaySamples = (sixteenthSamples * 3).coerceIn(1000, delayBuffer.size - 1)
 
                 for (i in buffer.indices) {
@@ -155,26 +181,60 @@ class HiChordEngine {
 
                     if (sampleCounter >= sixteenthSamples) {
                         sampleCounter = 0
-                        arpIndex = (arpIndex + 1) % 4
+                        arpStepCounter++
                         drumStep = (drumStep + 1) % 16
-                        if (drumEnabled && (drumStep % 4 == 0 || drumStep % 4 == 2 || drumStep == 14)) {
-                            drumEnv = 1f
-                            drumPhase = 0f
+
+                        // Multi-Mode Arpeggiator
+                        arpVoice = when (arpMode) {
+                            1 -> arpStepCounter % 4 // UP
+                            2 -> 3 - (arpStepCounter % 4) // DOWN
+                            3 -> pingPongOrder[arpStepCounter % pingPongOrder.size] // UP/DOWN
+                            4 -> Random.nextInt(4) // RANDOM
+                            else -> 0
+                        }
+
+                        // Multi-Mode Drumcomputer Patterns
+                        if (drumMode > 0) {
+                            when (drumMode) {
+                                1 -> { // TECHNO (Four-on-the-floor + Offbeat Hat)
+                                    if (drumStep % 4 == 0) { kickEnv = 1f; kickPhase = 0f }
+                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1f; snarePhase = 0f }
+                                    if (drumStep % 4 == 2 || drumStep == 15) { hatEnv = 1f }
+                                }
+                                2 -> { // LO-FI HIPHOP (Boom-Bap Syncopated)
+                                    if (drumStep == 0 || drumStep == 7 || drumStep == 10) { kickEnv = 1f; kickPhase = 0f }
+                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1f; snarePhase = 0f }
+                                    if (drumStep % 2 == 0 || drumStep == 11) { hatEnv = 0.8f }
+                                }
+                                3 -> { // SYNTHWAVE (Driving 80s Beat + 16th Hats)
+                                    if (drumStep == 0 || drumStep == 6 || drumStep == 8 || drumStep == 14) { kickEnv = 1f; kickPhase = 0f }
+                                    if (drumStep == 4 || drumStep == 12) { snareEnv = 1.1f; snarePhase = 0f }
+                                    hatEnv = if (drumStep % 2 == 0) 0.9f else 0.45f
+                                }
+                            }
                         }
                     }
 
-                    env = if (gate) {
-                        (env + 0.004f).coerceAtMost(1f)
+                    masterEnv = if (gate) {
+                        (masterEnv + 0.004f).coerceAtMost(1f)
                     } else {
-                        (env * 0.9993f).coerceAtLeast(0f)
+                        (masterEnv * 0.9992f).coerceAtLeast(0f)
                     }
 
                     var chordMix = 0f
-                    if (env > 0.001f) {
+                    if (masterEnv > 0.001f) {
                         for (v in 0 until 4) {
-                            if (arpEnabled && gate && v != arpIndex) continue
+                            if (arpMode > 0 && gate && v != arpVoice) continue
                             val freq = activeFreqs[v]
                             if (freq <= 20f) continue
+
+                            // Im Strum-Modus klingt jede Saite einzeln aus
+                            val vEnv = if (strumMode && arpMode == 0) {
+                                voiceEnvs[v] = (voiceEnvs[v] * 0.99965f).coerceAtLeast(0.05f)
+                                voiceEnvs[v]
+                            } else {
+                                1f
+                            }
 
                             val detuneRatio = if (fxChorus) 1.012f else 1.005f
                             phases[v] = (phases[v] + freq / sampleRate) % 1f
@@ -193,10 +253,9 @@ class HiChordEngine {
                                 val chorusOsc = (p2 * 2f) - 1f
                                 osc = (osc * 0.65f) + (chorusOsc * 0.5f)
                             }
-                            chordMix += osc * 0.21f
+                            chordMix += osc * 0.21f * vEnv
                         }
 
-                        // Sub-Octave bei aktivem Chorus/Fattener
                         if (fxChorus && activeFreqs[0] > 20f) {
                             subPhase = (subPhase + (activeFreqs[0] * 0.5f) / sampleRate) % 1f
                             chordMix += sin(subPhase * 2f * PI.toFloat()) * 0.18f
@@ -211,32 +270,40 @@ class HiChordEngine {
                         }
                     }
 
-                    // Tiefpassfilter
-                    lpState += cutoff * (chordMix * env - lpState)
-                    var finalSample = lpState
+                    // 2-Pol Resonantes Chamberlin State-Variable-Filter (SVF)
+                    val input = (chordMix * masterEnv).coerceIn(-1.2f, 1.2f)
+                    svfLow += svfF * svfBand
+                    val svfHigh = input - svfLow - svfQ * svfBand
+                    svfBand += svfF * svfHigh
+                    // Soft-Clipping gegen Filter-Selbstoszillation
+                    svfLow = svfLow.coerceIn(-1.5f, 1.5f)
+                    svfBand = svfBand.coerceIn(-1.5f, 1.5f)
 
-                    // Pocket-Drum-Synthese (Kick, Snare & Hi-Hat)
-                    if (drumEnabled && drumEnv > 0.001f) {
-                        val stepMod = drumStep % 4
-                        if (stepMod == 2 || drumStep == 14) {
-                            val noise = (Random.nextFloat() * 2f - 1f) * drumEnv * 0.22f
-                            finalSample += noise
-                            drumEnv *= 0.992f
-                        } else if (drumStep == 4 || drumStep == 12) {
-                            val snNoise = (Random.nextFloat() * 2f - 1f) * drumEnv * 0.35f
-                            drumPhase += 180f / sampleRate
-                            val snBody = sin(drumPhase * 2f * PI.toFloat()) * drumEnv * 0.25f
+                    var finalSample = svfLow
+
+                    // Multi-Mode Drum-Synthese
+                    if (drumMode > 0) {
+                        if (kickEnv > 0.001f) {
+                            val kFreq = 46f + kickEnv * 125f
+                            kickPhase += kFreq / sampleRate
+                            finalSample += sin(kickPhase * 2f * PI.toFloat()) * kickEnv * 0.58f
+                            kickEnv *= 0.9980f
+                        }
+                        if (snareEnv > 0.001f) {
+                            val snNoise = (Random.nextFloat() * 2f - 1f) * snareEnv * 0.35f
+                            snarePhase += 175f / sampleRate
+                            val snBody = sin(snarePhase * 2f * PI.toFloat()) * snareEnv * 0.25f
                             finalSample += snNoise + snBody
-                            drumEnv *= 0.995f
-                        } else {
-                            val kFreq = 48f + drumEnv * 115f
-                            drumPhase += kFreq / sampleRate
-                            finalSample += sin(drumPhase * 2f * PI.toFloat()) * drumEnv * 0.55f
-                            drumEnv *= 0.9982f
+                            snareEnv *= if (drumMode == 3) 0.9965f else 0.9945f // Längere Gated-Snare für Synthwave
+                        }
+                        if (hatEnv > 0.001f) {
+                            val noise = (Random.nextFloat() * 2f - 1f) * hatEnv * 0.20f
+                            finalSample += noise
+                            hatEnv *= 0.990f
                         }
                     }
 
-                    // Punch-In Bitcrusher (Sample-Rate & Bit-Depth Reduktion)
+                    // Punch-In Bitcrusher
                     if (fxCrush) {
                         crushCounter++
                         if (crushCounter >= 9) {
@@ -287,7 +354,8 @@ fun buildChord(
     add7th: Boolean,
     sus4: Boolean,
     octaveShift: Int,
-    joystickX: Float
+    joystickX: Float,
+    strumMode: Boolean
 ): Pair<String, FloatArray> {
     val rootMidi = 60 + keyIndex + majorScaleOffsets[degree] + (octaveShift * 12)
     val noteName = rootNames[(keyIndex + majorScaleOffsets[degree]) % 12]
@@ -311,11 +379,14 @@ fun buildChord(
 
     val intervals = intArrayOf(0, third, fifth, seventh)
 
-    if (joystickX < -0.35f) {
-        intervals[0] -= 12
-    } else if (joystickX > 0.35f) {
-        intervals[0] += 12
-        if (joystickX > 0.7f) intervals[1] += 12
+    // Nur im INV-Modus steuert Joystick X die Akkord-Umkehrungen
+    if (!strumMode) {
+        if (joystickX < -0.35f) {
+            intervals[0] -= 12
+        } else if (joystickX > 0.35f) {
+            intervals[0] += 12
+            if (joystickX > 0.7f) intervals[1] += 12
+        }
     }
 
     val freqs = FloatArray(4) { i -> midiToFreq(rootMidi + intervals[i]) }
@@ -344,10 +415,12 @@ fun TeHiChordScreen(synth: HiChordEngine) {
     var mod7th by remember { mutableStateOf(false) }
     var modSus4 by remember { mutableStateOf(false) }
     var octaveShift by remember { mutableIntStateOf(0) }
+    var holdLatch by remember { mutableStateOf(false) }
+    var strumMode by remember { mutableStateOf(false) }
 
     var waveIndex by remember { mutableIntStateOf(0) }
-    var arpOn by remember { mutableStateOf(false) }
-    var drumOn by remember { mutableStateOf(false) }
+    var arpMode by remember { mutableIntStateOf(0) }
+    var drumMode by remember { mutableIntStateOf(0) }
 
     // Punch-In FX States
     var fxDelay by remember { mutableStateOf(false) }
@@ -357,14 +430,17 @@ fun TeHiChordScreen(synth: HiChordEngine) {
 
     var joyX by remember { mutableFloatStateOf(0f) }
     var joyY by remember { mutableFloatStateOf(0f) }
+    var lastStrumZone by remember { mutableIntStateOf(-1) }
 
     val waveNames = listOf("SAW", "PULS", "SINE", "SSAW")
+    val arpNames = listOf("ARP", "UP", "DOWN", "U/D", "RAND")
+    val drumNames = listOf("BEAT", "TECH", "LOFI", "WAVE")
     val romanDegrees = listOf("I", "ii", "iii", "IV", "V", "vi", "vii°")
     val degreeSubLabels = listOf("TONIC", "SUPER", "MEDI", "SUBD", "DOM", "SUBM", "LEAD")
 
-    LaunchedEffect(activeDegree, keyIndex, modFlip, mod7th, modSus4, octaveShift, joyX) {
+    LaunchedEffect(activeDegree, keyIndex, modFlip, mod7th, modSus4, octaveShift, joyX, strumMode) {
         if (activeDegree in 0..6) {
-            val (name, freqs) = buildChord(keyIndex, activeDegree, modFlip, mod7th, modSus4, octaveShift, joyX)
+            val (name, freqs) = buildChord(keyIndex, activeDegree, modFlip, mod7th, modSus4, octaveShift, joyX, strumMode)
             displayChord = name
             synth.activeFreqs = freqs
             synth.gate = true
@@ -447,7 +523,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Display Top-Statusleiste mit BPM
+                    // Display Top-Statusleiste
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -458,7 +534,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                         DisplayBadge(text = waveNames[waveIndex], bgColor = Color(0xFF333333), textColor = TeOchre)
                     }
 
-                    // Haupt-Akkord-Anzeige + Aktive FX-Anzeige
+                    // Haupt-Akkord-Anzeige + Aktive Modi
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -466,8 +542,12 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     ) {
                         Column {
                             Text(
-                                text = if (activeDegree >= 0) "DEGREE ${romanDegrees[activeDegree]}" else "STANDBY",
-                                color = Color(0xFF888884),
+                                text = when {
+                                    activeDegree >= 0 && holdLatch -> "DEGREE ${romanDegrees[activeDegree]} [HOLD]"
+                                    activeDegree >= 0 -> "DEGREE ${romanDegrees[activeDegree]}"
+                                    else -> "STANDBY"
+                                },
+                                color = if (holdLatch) TeOchre else Color(0xFF888884),
                                 fontSize = 9.sp,
                                 fontFamily = FontFamily.Monospace
                             )
@@ -485,10 +565,14 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                             if (fxStutter) append("STU ")
                             if (fxChorus) append("CHR ")
                             if (isEmpty()) {
-                                when {
-                                    joyX < -0.35f -> append("BASS")
-                                    joyX > 0.35f -> append("INV")
-                                    else -> append("OCT:${if (octaveShift >= 0) "+$octaveShift" else octaveShift}")
+                                if (strumMode) {
+                                    append("STRUM")
+                                } else {
+                                    when {
+                                        joyX < -0.35f -> append("BASS")
+                                        joyX > 0.35f -> append("INV")
+                                        else -> append("OCT:${if (octaveShift >= 0) "+$octaveShift" else octaveShift}")
+                                    }
                                 }
                             }
                         }
@@ -522,7 +606,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             }
 
-            // TE Fadenkreuz-Joystick Modul
+            // TE Fadenkreuz-Joystick Modul (mit Umschalter für INV / STRUM)
             Box(
                 modifier = Modifier
                     .weight(0.9f)
@@ -530,15 +614,17 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFFC5C3BC))
                     .border(2.dp, Color(0xFFABA9A2), RoundedCornerShape(8.dp))
-                    .pointerInput(Unit) {
+                    .pointerInput(strumMode) {
                         detectDragGestures(
                             onDragEnd = {
                                 joyX = 0f; joyY = 0f
                                 synth.joystickX = 0f; synth.joystickY = 0f
+                                lastStrumZone = -1
                             },
                             onDragCancel = {
                                 joyX = 0f; joyY = 0f
                                 synth.joystickX = 0f; synth.joystickY = 0f
+                                lastStrumZone = -1
                             }
                         ) { change, dragAmount ->
                             change.consume()
@@ -547,6 +633,16 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                             val newY = (joyY * maxRadius - dragAmount.y).coerceIn(-maxRadius, maxRadius) / maxRadius
                             joyX = newX; joyY = newY
                             synth.joystickX = newX; synth.joystickY = newY
+
+                            // Im Strum-Modus: 4 Saiten über die X-Achse verteilt anreißen
+                            if (strumMode) {
+                                val zone = ((newX + 1f) * 2f).toInt().coerceIn(0, 3)
+                                if (zone != lastStrumZone) {
+                                    lastStrumZone = zone
+                                    synth.triggerStrumVoice(zone)
+                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                }
+                            }
                         }
                     }
                     .padding(6.dp),
@@ -561,24 +657,49 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     drawLine(Color(0xFF9E9C95), Offset(center.x - maxR, center.y), Offset(center.x + maxR, center.y), 1.5f)
                     drawLine(Color(0xFF9E9C95), Offset(center.x, center.y - maxR), Offset(center.x, center.y + maxR), 1.5f)
 
+                    // Bei aktivem Strum-Modus 4 vertikale Saiten-Linien einblenden
+                    if (strumMode) {
+                        for (s in -1..2) {
+                            val sx = center.x + (s + 0.5f) * (maxR / 2f)
+                            drawLine(TeOrange.copy(alpha = 0.45f), Offset(sx, center.y - maxR), Offset(sx, center.y + maxR), 2f)
+                        }
+                    }
+
                     val knobPos = Offset(center.x + joyX * maxR, center.y - joyY * maxR)
                     drawLine(TePanelDark, center, knobPos, strokeWidth = 6f, cap = StrokeCap.Round)
-                    drawCircle(TeOrange, radius = 16.dp.toPx(), center = knobPos)
+                    drawCircle(if (strumMode) TeBlue else TeOrange, radius = 16.dp.toPx(), center = knobPos)
                     drawCircle(Color.White, radius = 4.dp.toPx(), center = knobPos)
                 }
-                Text(
-                    text = "Y:LPF  X:INV",
-                    color = TePanelDark,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
+
+                // Klickbarer Modus-Schalter am unteren Rand des Joysticks (X:INV vs X:STRUM)
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (strumMode) TeBlue else TePanelDark)
+                        .clickable {
+                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            strumMode = !strumMode
+                            synth.strumMode = strumMode
+                            if (strumMode) {
+                                for (v in 0..3) synth.triggerStrumVoice(v)
+                            }
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (strumMode) "Y:SVF X:STRUM" else "Y:SVF X:INV",
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
 
-        // 3. SYSTEM, TONART & BPM-TEMPO
-        SectionDivider("SYSTEM // TEMPO & ENGINE")
+        // 3. SYSTEM, TONART, 1-SCHRITT-BPM & MULTI-MODE ARP/BEAT
+        SectionDivider("SYSTEM // 1-BPM TEMPO, WAVE & MULTI-MODES")
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -600,20 +721,20 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "BPM -", sub = "TEMPO", modifier = Modifier.weight(1f), height = 42.dp,
+                title = "BPM -", sub = "-1 BPM", modifier = Modifier.weight(1f), height = 42.dp,
                 bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    bpm = (bpm - 5).coerceAtLeast(60)
+                    bpm = (bpm - 1).coerceAtLeast(60)
                     synth.bpm = bpm
                 }
             )
             TeTactileButton(
-                title = "BPM +", sub = "TEMPO", modifier = Modifier.weight(1f), height = 42.dp,
+                title = "BPM +", sub = "+1 BPM", modifier = Modifier.weight(1f), height = 42.dp,
                 bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    bpm = (bpm + 5).coerceAtMost(200)
+                    bpm = (bpm + 1).coerceAtMost(200)
                     synth.bpm = bpm
                 }
             )
@@ -627,21 +748,21 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "ARP", sub = "1/16", modifier = Modifier.weight(0.95f), height = 42.dp,
-                bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = arpOn,
+                title = arpNames[arpMode], sub = "MODE", modifier = Modifier.weight(0.95f), height = 42.dp,
+                bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = arpMode > 0,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    arpOn = !arpOn
-                    synth.arpEnabled = arpOn
+                    arpMode = (arpMode + 1) % arpNames.size
+                    synth.arpMode = arpMode
                 }
             )
             TeTactileButton(
-                title = "BEAT", sub = "DRUM", modifier = Modifier.weight(0.95f), height = 42.dp,
-                bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = drumOn,
+                title = drumNames[drumMode], sub = "STYLE", modifier = Modifier.weight(0.95f), height = 42.dp,
+                bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = drumMode > 0,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    drumOn = !drumOn
-                    synth.drumEnabled = drumOn
+                    drumMode = (drumMode + 1) % drumNames.size
+                    synth.drumMode = drumMode
                 }
             )
         }
@@ -686,14 +807,25 @@ fun TeHiChordScreen(synth: HiChordEngine) {
             )
         }
 
-        // 5. AKKORD-MODIFIKATOREN (LATCH)
-        SectionDivider("HARMONIC MODIFIERS // LATCH")
+        // 5. AKKORD-MODIFIKATOREN + HOLD/DRONE LATCH
+        SectionDivider("HARMONIC MODIFIERS // LATCH & HOLD")
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             TeTactileButton(
-                title = "MAJ/MIN", sub = "FLIP", modifier = Modifier.weight(1.1f), height = 46.dp,
+                title = "HOLD", sub = "DRONE", modifier = Modifier.weight(0.95f), height = 46.dp,
+                bgColor = if (holdLatch) TeBlue else TeKeyDark,
+                shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow,
+                textColor = Color.White, ledOn = holdLatch,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    holdLatch = !holdLatch
+                    if (!holdLatch) activeDegree = -1
+                }
+            )
+            TeTactileButton(
+                title = "MAJ/MIN", sub = "FLIP", modifier = Modifier.weight(1.05f), height = 46.dp,
                 bgColor = if (modFlip) TeOrange else TeKeyDark,
                 shadowColor = if (modFlip) TeOrangeShadow else TeKeyDarkShadow,
                 textColor = Color.White, ledOn = modFlip,
@@ -703,7 +835,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "7TH", sub = "JAZZ", modifier = Modifier.weight(1f), height = 46.dp,
+                title = "7TH", sub = "JAZZ", modifier = Modifier.weight(0.9f), height = 46.dp,
                 bgColor = if (mod7th) TeOrange else TeKeyDark,
                 shadowColor = if (mod7th) TeOrangeShadow else TeKeyDarkShadow,
                 textColor = Color.White, ledOn = mod7th,
@@ -713,7 +845,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "SUS4", sub = "TENSION", modifier = Modifier.weight(1f), height = 46.dp,
+                title = "SUS4", sub = "TENS", modifier = Modifier.weight(0.9f), height = 46.dp,
                 bgColor = if (modSus4) TeOrange else TeKeyDark,
                 shadowColor = if (modSus4) TeOrangeShadow else TeKeyDarkShadow,
                 textColor = Color.White, ledOn = modSus4,
@@ -723,7 +855,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "OCT -", sub = "DOWN", modifier = Modifier.weight(0.85f), height = 46.dp,
+                title = "OCT -", sub = "DOWN", modifier = Modifier.weight(0.8f), height = 46.dp,
                 bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = octaveShift < 0,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -731,7 +863,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                 }
             )
             TeTactileButton(
-                title = "OCT +", sub = "UP", modifier = Modifier.weight(0.85f), height = 46.dp,
+                title = "OCT +", sub = "UP", modifier = Modifier.weight(0.8f), height = 46.dp,
                 bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = octaveShift > 0,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -740,10 +872,60 @@ fun TeHiChordScreen(synth: HiChordEngine) {
             )
         }
 
-        // 6. DIATONISCHE KLAVIATUR-PADS (STUFEN I - VII)
-        SectionDivider("DIATONIC CHORD TRIGGERS // I - VII")
+        // 6. DIATONISCHE KLAVIATUR-PADS MIT ECHTEM FINGER-GLIDING (LEGATO SLIDE)
+        SectionDivider("DIATONIC CHORD TRIGGERS // SLIDE OR TAP (I - VII)")
+        var padGridSize by remember { mutableStateOf(IntSize.Zero) }
+
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { padGridSize = it }
+                .pointerInput(holdLatch, strumMode) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        fun mapOffsetToDegree(pos: Offset): Int {
+                            if (padGridSize.width <= 0 || padGridSize.height <= 0) return -1
+                            if (pos.x < 0f || pos.x > padGridSize.width || pos.y < 0f || pos.y > padGridSize.height) return -1
+                            val isBottomRow = pos.y > padGridSize.height / 2f
+                            return if (!isBottomRow) {
+                                val col = ((pos.x / padGridSize.width) * 4f).toInt().coerceIn(0, 3)
+                                col
+                            } else {
+                                val col = ((pos.x / padGridSize.width) * 3f).toInt().coerceIn(0, 2)
+                                4 + col
+                            }
+                        }
+
+                        var currentDeg = mapOffsetToDegree(down.position)
+                        if (currentDeg in 0..6) {
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            activeDegree = currentDeg
+                            if (strumMode) {
+                                for (v in 0..3) synth.triggerStrumVoice(v)
+                            }
+                        }
+
+                        do {
+                            val event = awaitPointerEvent()
+                            val activeChange = event.changes.firstOrNull { it.pressed }
+                            if (activeChange != null) {
+                                activeChange.consume()
+                                val slidedDeg = mapOffsetToDegree(activeChange.position)
+                                if (slidedDeg in 0..6 && slidedDeg != activeDegree) {
+                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    activeDegree = slidedDeg
+                                    if (strumMode) {
+                                        for (v in 0..3) synth.triggerStrumVoice(v)
+                                    }
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+
+                        if (!holdLatch) {
+                            activeDegree = -1
+                        }
+                    }
+                },
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -756,12 +938,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     TeChordKeycap(
                         number = "0${deg + 1}", roman = romanDegrees[deg], subLabel = degreeSubLabels[deg],
                         note = "$noteLabel$qualSuffix", isPressed = activeDegree == deg,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        onPress = {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            activeDegree = deg
-                        },
-                        onRelease = { if (activeDegree == deg) activeDegree = -1 }
+                        modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                 }
             }
@@ -779,12 +956,7 @@ fun TeHiChordScreen(synth: HiChordEngine) {
                     TeChordKeycap(
                         number = "0${deg + 1}", roman = romanDegrees[deg], subLabel = degreeSubLabels[deg],
                         note = "$noteLabel$qualSuffix", isPressed = activeDegree == deg,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        onPress = {
-                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            activeDegree = deg
-                        },
-                        onRelease = { if (activeDegree == deg) activeDegree = -1 }
+                        modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                 }
             }
@@ -986,9 +1158,7 @@ fun TeChordKeycap(
     subLabel: String,
     note: String,
     isPressed: Boolean,
-    modifier: Modifier = Modifier,
-    onPress: () -> Unit,
-    onRelease: () -> Unit
+    modifier: Modifier = Modifier
 ) {
     val topPadding = if (isPressed) 4.dp else 0.dp
     val bottomDepth = if (isPressed) 1.dp else 5.dp
@@ -998,15 +1168,6 @@ fun TeChordKeycap(
             .padding(top = topPadding)
             .clip(RoundedCornerShape(9.dp))
             .background(if (isPressed) TeOrangeShadow else TeKeyLightShadow)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        onPress()
-                        tryAwaitRelease()
-                        onRelease()
-                    }
-                )
-            }
             .padding(bottom = bottomDepth)
     ) {
         Box(
