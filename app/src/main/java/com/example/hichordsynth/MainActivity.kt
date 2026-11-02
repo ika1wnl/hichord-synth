@@ -65,7 +65,7 @@ val TeLedRed = Color(0xFFFF2A2A)
 val TeLedOff = Color(0xFF4A4946)
 
 class MainActivity : ComponentActivity() {
-    private val synth = HiChordEngine()
+    private val synth = WolfChordEngine()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,22 +92,24 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- VOICE & PRESET ARCHITEKTUR ---
-// Engine Types:
-// 0: ANALOG SAW (Warm PolyBLEP Saw + Sub-Warmth)
-// 1: PWM PULSE (Modulated Pulse Width for Strings, Choir & Vintage Synths)
-// 2: PURE TRI/SINE (Warm Triangle-Sine Hybrid with Bell Harmonics)
-// 3: 5-SAW CLUSTER (True 5-Oscillator Detuned SuperSaw per Voice)
-// 4: DX 2-OP FM (True Phase-Modulation FM with Dynamic Envelope Index for Rhodes/Bells)
-// 5: PLUCKED STRING (Harmonic Damped String / Piano Hammer Model)
-val engineNames = listOf("SAW", "PWM", "TRI", "SSAW", "DXFM", "STRG")
-val fmRatios = floatArrayOf(0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 7.0f)
+// --- CHORD MACHINE / DAISY-SP SYNTHESE-ALGORITHMEN ---
+// 0: VA_SAW      (Bandlimited PolyBLEP Saw + Analog Drift)
+// 1: OCT_SAW     (Chord Machine Octave-Saw + Sub-Saw Stack)
+// 2: VA_PWM      (Variable Pulse Width Modulation + Ensemble)
+// 3: FM1_EP      (DX Rhodes Electric Piano: 1:1 + 1:14 Tine Transient)
+// 4: FM2_MALLET  (Inharmonic 1:3.5 / 1:4 Vibraphone & Marimba Resonator)
+// 5: FM3_BELL    (Metallic Shimmer / Warm Glass Bell)
+// 6: KS_STRING   (Echte Karplus-Strong Delay-Line Waveguide für Harp, Guitar & Clav)
+// 7: HAMMER_PNO  (Multi-String Piano Model mit Hammer-Filz-Filter & Soundboard)
+val engineNames = listOf("SAW", "OSAW", "PWM", "FM1", "FM2", "FM3", "STRG", "PNO")
+val fmRatios = floatArrayOf(0.5f, 1.0f, 2.0f, 3.5f, 4.0f, 7.0f, 14.0f)
 val adsrNames = listOf("SUST", "SWEL", "PLCK", "KEYS")
 
 class VoiceConfig(
-    @Volatile var engine: Int = 4,
+    @Volatile var engine: Int = 3,
     @Volatile var fmRatioIndex: Int = 1,
-    @Volatile var fmDepth: Float = 0.25f,
+    @Volatile var timbre: Float = 0.42f,   // Steuert FM-Index, String-Brightness oder PWM
+    @Volatile var morph: Float = 0.35f,    // Steuert Decay-Damping, Detune-Spread oder Tine-Pegel
     @Volatile var detuneCents: Int = 0,
     @Volatile var octShift: Int = 0,
     @Volatile var pan: Float = 0f,
@@ -117,7 +119,8 @@ class VoiceConfig(
 data class VoicePresetData(
     val engine: Int,
     val fmRatioIndex: Int,
-    val fmDepth: Float,
+    val timbre: Float,
+    val morph: Float,
     val detuneCents: Int,
     val octShift: Int,
     val pan: Float,
@@ -133,41 +136,41 @@ data class SynthPreset(
     val decayMs: Float,
     val sustainLevel: Float,
     val releaseMs: Float,
-    val hammerClick: Float,     // Transient-Anschlag (Piano-Hammer / Gitarren-Plektrum / Mallet)
     val baseCutoff: Float,
     val filterResonance: Float,
     val filterEnvAmount: Float,
     val vibratoDepth: Float,
-    val pwmDepth: Float,        // Bewegt die Pulsbreite für lebendigen Nicht-Orgel-Sound
+    val tremoloDepth: Float,    // Stereo Auto-Pan / Tremolo (für E-Piano & Vibraphone)
     val glideSpeed: Float,
     val reverbSend: Float,
-    val chorusOn: Boolean,
+    val ensembleOn: Boolean,
     val delayOn: Boolean,
     val voices: List<VoicePresetData>,
     val isUser: Boolean = false
 ) {
     fun serialize(): String {
         val vStr = voices.joinToString(";") {
-            "${it.engine},${it.fmRatioIndex},${it.fmDepth},${it.detuneCents},${it.octShift},${it.pan},${it.level}"
+            "${it.engine},${it.fmRatioIndex},${it.timbre},${it.morph},${it.detuneCents},${it.octShift},${it.pan},${it.level}"
         }
-        return "$id|$name|$category|$adsrMode|$attackMs|$decayMs|$sustainLevel|$releaseMs|$hammerClick|$baseCutoff|$filterResonance|$filterEnvAmount|$vibratoDepth|$pwmDepth|$glideSpeed|$reverbSend|$chorusOn|$delayOn|$vStr"
+        return "$id|$name|$category|$adsrMode|$attackMs|$decayMs|$sustainLevel|$releaseMs|$baseCutoff|$filterResonance|$filterEnvAmount|$vibratoDepth|$tremoloDepth|$glideSpeed|$reverbSend|$ensembleOn|$delayOn|$vStr"
     }
 
     companion object {
         fun deserialize(raw: String): SynthPreset? {
             return try {
                 val p = raw.split("|")
-                if (p.size < 19) return null
-                val vList = p[18].split(";").map { vRaw ->
+                if (p.size < 18) return null
+                val vList = p[17].split(";").map { vRaw ->
                     val vp = vRaw.split(",")
                     VoicePresetData(
                         engine = vp[0].toInt(),
                         fmRatioIndex = vp[1].toInt(),
-                        fmDepth = vp[2].toFloat(),
-                        detuneCents = vp[3].toInt(),
-                        octShift = vp[4].toInt(),
-                        pan = vp[5].toFloat(),
-                        level = vp[6].toFloat()
+                        timbre = vp[2].toFloat(),
+                        morph = vp[3].toFloat(),
+                        detuneCents = vp[4].toInt(),
+                        octShift = vp[5].toInt(),
+                        pan = vp[6].toFloat(),
+                        level = vp[7].toFloat()
                     )
                 }
                 if (vList.size != 4) return null
@@ -175,12 +178,11 @@ data class SynthPreset(
                     id = p[0], name = p[1], category = p[2],
                     adsrMode = p[3].toInt(), attackMs = p[4].toFloat(), decayMs = p[5].toFloat(),
                     sustainLevel = p[6].toFloat(), releaseMs = p[7].toFloat(),
-                    hammerClick = p[8].toFloat(), baseCutoff = p[9].toFloat(),
-                    filterResonance = p[10].toFloat(), filterEnvAmount = p[11].toFloat(),
-                    vibratoDepth = p[12].toFloat(), pwmDepth = p[13].toFloat(),
-                    glideSpeed = p[14].toFloat(), reverbSend = p[15].toFloat(),
-                    chorusOn = p[16].toBoolean(), delayOn = p[17].toBoolean(),
-                    voices = vList, isUser = true
+                    baseCutoff = p[8].toFloat(), filterResonance = p[9].toFloat(),
+                    filterEnvAmount = p[10].toFloat(), vibratoDepth = p[11].toFloat(),
+                    tremoloDepth = p[12].toFloat(), glideSpeed = p[13].toFloat(),
+                    reverbSend = p[14].toFloat(), ensembleOn = p[15].toBoolean(),
+                    delayOn = p[16].toBoolean(), voices = vList, isUser = true
                 )
             } catch (_: Exception) {
                 null
@@ -189,235 +191,235 @@ data class SynthPreset(
     }
 }
 
-// --- DIE 16 ORIGINALEN HICHORD HARDWARE-PRESETS (OHNE GENRE-GIMMICKS) ---
+// --- DIE 16 ORIGINALEN HICHORD & CHORD-MACHINE INSTRUMENTE ---
 val factoryPresets = listOf(
-    // 01. FM E-PIANO (Warm DX7 / Rhodes Tine Piano)
+    // 01. FM E-PIANO (Rhodes Mk1 + Stereo Auto-Pan Tremolo)
     SynthPreset(
-        id = "hc_01_epiano", name = "FM E-PIANO", category = "KEYS",
-        adsrMode = 3, attackMs = 2f, decayMs = 1400f, sustainLevel = 0.14f, releaseMs = 420f,
-        hammerClick = 0.35f, baseCutoff = 0.46f, filterResonance = 0.25f, filterEnvAmount = 0.45f,
-        vibratoDepth = 0.0018f, pwmDepth = 0f, glideSpeed = 0.040f, reverbSend = 0.35f,
-        chorusOn = true, delayOn = false,
+        id = "cm_01_epiano", name = "FM E-PIANO", category = "KEYS",
+        adsrMode = 3, attackMs = 2f, decayMs = 1500f, sustainLevel = 0.12f, releaseMs = 420f,
+        baseCutoff = 0.62f, filterResonance = 0.18f, filterEnvAmount = 0.35f,
+        vibratoDepth = 0.0010f, tremoloDepth = 0.45f, glideSpeed = 0.045f, reverbSend = 0.32f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 4, fmRatioIndex = 1, fmDepth = 0.32f, detuneCents = 0, octShift = 0, pan = 0f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 1, fmDepth = 0.38f, detuneCents = -6, octShift = 0, pan = -0.55f, level = 0.86f),
-            VoicePresetData(engine = 4, fmRatioIndex = 2, fmDepth = 0.25f, detuneCents = 6, octShift = 0, pan = 0.55f, level = 0.86f),
-            VoicePresetData(engine = 4, fmRatioIndex = 5, fmDepth = 0.18f, detuneCents = 10, octShift = 0, pan = 0.20f, level = 0.68f)
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.42f, morph = 0.35f, detuneCents = -2, octShift = 0, pan = -0.35f, level = 0.95f),
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.45f, morph = 0.40f, detuneCents = 3, octShift = 0, pan = 0.35f, level = 0.90f),
+            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.38f, morph = 0.30f, detuneCents = -4, octShift = 0, pan = -0.60f, level = 0.85f),
+            VoicePresetData(engine = 3, fmRatioIndex = 5, timbre = 0.30f, morph = 0.48f, detuneCents = 5, octShift = 0, pan = 0.60f, level = 0.78f)
         )
     ),
-    // 02. GRAND PIANO (Acoustic Hammer-String Modeling)
+    // 02. GRAND PIANO (Echte Karplus-Strong Hammer-Saiten-Resonanz)
     SynthPreset(
-        id = "hc_02_piano", name = "GRAND PIANO", category = "KEYS",
-        adsrMode = 2, attackMs = 1.5f, decayMs = 1150f, sustainLevel = 0.0f, releaseMs = 340f,
-        hammerClick = 0.55f, baseCutoff = 0.52f, filterResonance = 0.20f, filterEnvAmount = 0.58f,
-        vibratoDepth = 0.0003f, pwmDepth = 0f, glideSpeed = 0.080f, reverbSend = 0.32f,
-        chorusOn = false, delayOn = false,
+        id = "cm_02_piano", name = "GRAND PIANO", category = "KEYS",
+        adsrMode = 2, attackMs = 1.5f, decayMs = 1450f, sustainLevel = 0.0f, releaseMs = 320f,
+        baseCutoff = 0.72f, filterResonance = 0.15f, filterEnvAmount = 0.45f,
+        vibratoDepth = 0.0f, tremoloDepth = 0.0f, glideSpeed = 0.090f, reverbSend = 0.30f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.35f, detuneCents = -2, octShift = 0, pan = -0.25f, level = 0.95f),
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.35f, detuneCents = 2, octShift = 0, pan = 0.25f, level = 0.92f),
-            VoicePresetData(engine = 5, fmRatioIndex = 2, fmDepth = 0.22f, detuneCents = -4, octShift = 0, pan = -0.55f, level = 0.88f),
-            VoicePresetData(engine = 5, fmRatioIndex = 2, fmDepth = 0.22f, detuneCents = 4, octShift = 0, pan = 0.55f, level = 0.85f)
+            VoicePresetData(engine = 7, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = -2, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 7, fmRatioIndex = 1, timbre = 0.65f, morph = 0.72f, detuneCents = 2, octShift = 0, pan = 0.30f, level = 0.92f),
+            VoicePresetData(engine = 7, fmRatioIndex = 2, timbre = 0.60f, morph = 0.68f, detuneCents = -3, octShift = 0, pan = -0.60f, level = 0.88f),
+            VoicePresetData(engine = 7, fmRatioIndex = 2, timbre = 0.58f, morph = 0.65f, detuneCents = 3, octShift = 0, pan = 0.60f, level = 0.84f)
         )
     ),
-    // 03. WARM PAD (Juno-60 Lush Analog PWM + Saw Pad)
+    // 03. DELICATE HARP (Echte Karplus-Strong Zupfsaiten!)
     SynthPreset(
-        id = "hc_03_warmpad", name = "WARM PAD", category = "SYNTH PAD",
-        adsrMode = 1, attackMs = 420f, decayMs = 900f, sustainLevel = 0.88f, releaseMs = 950f,
-        hammerClick = 0f, baseCutoff = 0.28f, filterResonance = 0.35f, filterEnvAmount = 0.22f,
-        vibratoDepth = 0.0020f, pwmDepth = 0.35f, glideSpeed = 0.0035f, reverbSend = 0.55f,
-        chorusOn = true, delayOn = false,
+        id = "cm_03_harp", name = "DELICATE HARP", category = "PLUCK",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 1300f, sustainLevel = 0.0f, releaseMs = 450f,
+        baseCutoff = 0.78f, filterResonance = 0.12f, filterEnvAmount = 0.35f,
+        vibratoDepth = 0.0006f, tremoloDepth = 0.0f, glideSpeed = 0.080f, reverbSend = 0.52f,
+        ensembleOn = false, delayOn = true,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -9, octShift = 0, pan = -0.60f, level = 0.90f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 9, octShift = 0, pan = 0.60f, level = 0.90f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -16, octShift = 0, pan = -0.80f, level = 0.82f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 16, octShift = 0, pan = 0.80f, level = 0.82f)
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.55f, morph = 0.82f, detuneCents = 0, octShift = 0, pan = -0.35f, level = 0.95f),
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.58f, morph = 0.80f, detuneCents = -3, octShift = 0, pan = 0.35f, level = 0.92f),
+            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.62f, morph = 0.78f, detuneCents = 3, octShift = 0, pan = -0.70f, level = 0.88f),
+            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.65f, morph = 0.75f, detuneCents = 5, octShift = 1, pan = 0.70f, level = 0.76f)
         )
     ),
-    // 04. STRINGS (Solina / Ensemble String Machine)
+    // 04. ACOUSTIC GUITAR (Karplus-Strong Steel-String Guitar)
     SynthPreset(
-        id = "hc_04_strings", name = "STRINGS", category = "ENSEMBLE",
-        adsrMode = 1, attackMs = 520f, decayMs = 800f, sustainLevel = 0.92f, releaseMs = 880f,
-        hammerClick = 0f, baseCutoff = 0.48f, filterResonance = 0.30f, filterEnvAmount = 0.15f,
-        vibratoDepth = 0.0032f, pwmDepth = 0.42f, glideSpeed = 0.0050f, reverbSend = 0.58f,
-        chorusOn = true, delayOn = false,
+        id = "cm_04_guitar", name = "STEEL GUITAR", category = "PLUCK",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 1150f, sustainLevel = 0.0f, releaseMs = 300f,
+        baseCutoff = 0.68f, filterResonance = 0.25f, filterEnvAmount = 0.48f,
+        vibratoDepth = 0.0012f, tremoloDepth = 0.0f, glideSpeed = 0.025f, reverbSend = 0.36f,
+        ensembleOn = true, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -12, octShift = 0, pan = -0.75f, level = 0.88f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 12, octShift = 0, pan = 0.75f, level = 0.88f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -19, octShift = 0, pan = -0.45f, level = 0.82f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 19, octShift = 1, pan = 0.45f, level = 0.62f)
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.82f, morph = 0.68f, detuneCents = -2, octShift = -1, pan = -0.25f, level = 0.95f),
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.78f, morph = 0.70f, detuneCents = 2, octShift = 0, pan = 0.25f, level = 0.90f),
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.85f, morph = 0.66f, detuneCents = -4, octShift = 0, pan = -0.65f, level = 0.88f),
+            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.80f, morph = 0.64f, detuneCents = 4, octShift = 0, pan = 0.65f, level = 0.85f)
         )
     ),
-    // 05. SAW SYNTH (Prophet-5 Polyphonic Analog Synth)
+    // 05. WARM PAD (Juno-60 Analog PWM + Sub-Saw Pad mit Per-Voice Filter-Sweep)
     SynthPreset(
-        id = "hc_05_sawsynth", name = "SAW SYNTH", category = "ANALOG",
-        adsrMode = 0, attackMs = 8f, decayMs = 450f, sustainLevel = 0.80f, releaseMs = 320f,
-        hammerClick = 0.12f, baseCutoff = 0.54f, filterResonance = 0.42f, filterEnvAmount = 0.42f,
-        vibratoDepth = 0.0014f, pwmDepth = 0f, glideSpeed = 0.0065f, reverbSend = 0.30f,
-        chorusOn = true, delayOn = false,
+        id = "cm_05_warmpad", name = "WARM PAD", category = "SYNTH PAD",
+        adsrMode = 1, attackMs = 450f, decayMs = 1100f, sustainLevel = 0.85f, releaseMs = 950f,
+        baseCutoff = 0.26f, filterResonance = 0.38f, filterEnvAmount = 0.42f,
+        vibratoDepth = 0.0022f, tremoloDepth = 0.0f, glideSpeed = 0.0035f, reverbSend = 0.56f,
+        ensembleOn = true, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -7, octShift = 0, pan = -0.40f, level = 0.92f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 7, octShift = 0, pan = 0.40f, level = 0.92f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -14, octShift = 0, pan = -0.75f, level = 0.86f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 14, octShift = 0, pan = 0.75f, level = 0.86f)
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.55f, morph = 0.50f, detuneCents = -8, octShift = 0, pan = -0.55f, level = 0.90f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.45f, morph = 0.40f, detuneCents = 8, octShift = 0, pan = 0.55f, level = 0.90f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.50f, morph = 0.60f, detuneCents = -15, octShift = 0, pan = -0.85f, level = 0.84f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.60f, morph = 0.50f, detuneCents = 15, octShift = 0, pan = 0.85f, level = 0.84f)
         )
     ),
-    // 06. SUPERSAW (Wide 5-Oscillator per Voice Stack)
+    // 06. STRINGS (Solina 3-Phase BBD Ensemble String Machine)
     SynthPreset(
-        id = "hc_06_supersaw", name = "SUPERSAW", category = "ANALOG",
-        adsrMode = 0, attackMs = 6f, decayMs = 500f, sustainLevel = 0.90f, releaseMs = 380f,
-        hammerClick = 0.10f, baseCutoff = 0.68f, filterResonance = 0.35f, filterEnvAmount = 0.35f,
-        vibratoDepth = 0.0010f, pwmDepth = 0f, glideSpeed = 0.0055f, reverbSend = 0.42f,
-        chorusOn = true, delayOn = false,
+        id = "cm_06_strings", name = "STRINGS", category = "ENSEMBLE",
+        adsrMode = 1, attackMs = 540f, decayMs = 900f, sustainLevel = 0.92f, releaseMs = 920f,
+        baseCutoff = 0.52f, filterResonance = 0.25f, filterEnvAmount = 0.22f,
+        vibratoDepth = 0.0030f, tremoloDepth = 0.12f, glideSpeed = 0.0045f, reverbSend = 0.58f,
+        ensembleOn = true, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -10, octShift = 0, pan = -0.50f, level = 0.92f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 10, octShift = 0, pan = 0.50f, level = 0.92f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -24, octShift = 0, pan = -0.90f, level = 0.88f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 24, octShift = 0, pan = 0.90f, level = 0.88f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.62f, morph = 0.55f, detuneCents = -11, octShift = 0, pan = -0.75f, level = 0.88f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.68f, morph = 0.60f, detuneCents = 11, octShift = 0, pan = 0.75f, level = 0.88f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.55f, morph = 0.45f, detuneCents = -18, octShift = 0, pan = -0.45f, level = 0.82f),
+            VoicePresetData(engine = 1, fmRatioIndex = 2, timbre = 0.50f, morph = 0.50f, detuneCents = 18, octShift = 0, pan = 0.45f, level = 0.78f)
         )
     ),
-    // 07. SYNTH BRASS (OB-Xa / CS-80 Filter Swell Brass)
+    // 07. SAW SYNTH (Prophet-5 Polyphonic Analog Saw)
     SynthPreset(
-        id = "hc_07_brass", name = "SYNTH BRASS", category = "ANALOG",
-        adsrMode = 0, attackMs = 38f, decayMs = 520f, sustainLevel = 0.84f, releaseMs = 340f,
-        hammerClick = 0.05f, baseCutoff = 0.24f, filterResonance = 0.48f, filterEnvAmount = 0.68f,
-        vibratoDepth = 0.0022f, pwmDepth = 0.15f, glideSpeed = 0.0030f, reverbSend = 0.38f,
-        chorusOn = true, delayOn = false,
+        id = "cm_07_sawsynth", name = "SAW SYNTH", category = "ANALOG",
+        adsrMode = 0, attackMs = 6f, decayMs = 480f, sustainLevel = 0.72f, releaseMs = 320f,
+        baseCutoff = 0.38f, filterResonance = 0.45f, filterEnvAmount = 0.58f,
+        vibratoDepth = 0.0015f, tremoloDepth = 0.0f, glideSpeed = 0.0065f, reverbSend = 0.32f,
+        ensembleOn = true, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0.06f, detuneCents = -8, octShift = 0, pan = -0.45f, level = 0.94f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 8, octShift = 0, pan = 0.45f, level = 0.90f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -18, octShift = 0, pan = -0.85f, level = 0.88f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0.08f, detuneCents = 18, octShift = 0, pan = 0.85f, level = 0.88f)
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = -7, octShift = 0, pan = -0.45f, level = 0.92f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = 7, octShift = 0, pan = 0.45f, level = 0.92f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.60f, morph = 0.42f, detuneCents = -14, octShift = 0, pan = -0.80f, level = 0.86f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.60f, morph = 0.42f, detuneCents = 14, octShift = 0, pan = 0.80f, level = 0.86f)
         )
     ),
-    // 08. VIBRAPHONE (Metallic Mallet Strike + Motor Tremolo)
+    // 08. OCTAVE SAW (Chord Machine Signature Octave-Saw Stack)
     SynthPreset(
-        id = "hc_08_vibraphone", name = "VIBRAPHONE", category = "MALLET",
-        adsrMode = 2, attackMs = 1.5f, decayMs = 1050f, sustainLevel = 0.0f, releaseMs = 520f,
-        hammerClick = 0.48f, baseCutoff = 0.58f, filterResonance = 0.22f, filterEnvAmount = 0.40f,
-        vibratoDepth = 0.0042f, pwmDepth = 0f, glideSpeed = 0.060f, reverbSend = 0.48f,
-        chorusOn = true, delayOn = false,
+        id = "cm_08_octsaw", name = "OCTAVE SAW", category = "ANALOG",
+        adsrMode = 0, attackMs = 5f, decayMs = 520f, sustainLevel = 0.82f, releaseMs = 360f,
+        baseCutoff = 0.54f, filterResonance = 0.38f, filterEnvAmount = 0.48f,
+        vibratoDepth = 0.0012f, tremoloDepth = 0.0f, glideSpeed = 0.0055f, reverbSend = 0.40f,
+        ensembleOn = true, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 4, fmRatioIndex = 4, fmDepth = 0.35f, detuneCents = 0, octShift = 0, pan = -0.25f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, fmDepth = 0.38f, detuneCents = -4, octShift = 0, pan = 0.25f, level = 0.88f),
-            VoicePresetData(engine = 2, fmRatioIndex = 3, fmDepth = 0.22f, detuneCents = 4, octShift = 0, pan = -0.60f, level = 0.85f),
-            VoicePresetData(engine = 4, fmRatioIndex = 5, fmDepth = 0.28f, detuneCents = 7, octShift = 1, pan = 0.60f, level = 0.65f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.72f, morph = 0.65f, detuneCents = -10, octShift = 0, pan = -0.55f, level = 0.92f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.72f, morph = 0.65f, detuneCents = 10, octShift = 0, pan = 0.55f, level = 0.92f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = -22, octShift = 0, pan = -0.90f, level = 0.88f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = 22, octShift = 0, pan = 0.90f, level = 0.88f)
         )
     ),
-    // 09. DELICATE HARP (Plucked Acoustic Harp Strings)
+    // 09. SYNTH BRASS (OB-Xa / CS-80 Analog Filter-Sweep Brass)
     SynthPreset(
-        id = "hc_09_harp", name = "DELICATE HARP", category = "PLUCK",
-        adsrMode = 2, attackMs = 1.5f, decayMs = 680f, sustainLevel = 0.0f, releaseMs = 420f,
-        hammerClick = 0.42f, baseCutoff = 0.42f, filterResonance = 0.28f, filterEnvAmount = 0.65f,
-        vibratoDepth = 0.0008f, pwmDepth = 0f, glideSpeed = 0.050f, reverbSend = 0.54f,
-        chorusOn = false, delayOn = true,
+        id = "cm_09_brass", name = "SYNTH BRASS", category = "ANALOG",
+        adsrMode = 0, attackMs = 42f, decayMs = 480f, sustainLevel = 0.76f, releaseMs = 300f,
+        baseCutoff = 0.18f, filterResonance = 0.52f, filterEnvAmount = 0.76f,
+        vibratoDepth = 0.0020f, tremoloDepth = 0.0f, glideSpeed = 0.0032f, reverbSend = 0.36f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.24f, detuneCents = 0, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 5, fmRatioIndex = 2, fmDepth = 0.20f, detuneCents = -5, octShift = 0, pan = 0.30f, level = 0.90f),
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.24f, detuneCents = 5, octShift = 0, pan = -0.65f, level = 0.88f),
-            VoicePresetData(engine = 5, fmRatioIndex = 3, fmDepth = 0.18f, detuneCents = 8, octShift = 1, pan = 0.65f, level = 0.72f)
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.80f, morph = 0.30f, detuneCents = -9, octShift = 0, pan = -0.50f, level = 0.94f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = 9, octShift = 0, pan = 0.50f, level = 0.90f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.75f, morph = 0.45f, detuneCents = -18, octShift = 0, pan = -0.85f, level = 0.88f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.80f, morph = 0.30f, detuneCents = 18, octShift = 0, pan = 0.85f, level = 0.88f)
         )
     ),
-    // 10. WARM E-GUITAR (Jazz / Indie Clean Picked Electric Guitar)
+    // 10. VIBRAPHONE (Inharmonic 1:3.5 / 1:4 Modal Mallet + Motor Tremolo)
     SynthPreset(
-        id = "hc_10_eguitar", name = "WARM E-GUITAR", category = "PLUCK",
-        adsrMode = 2, attackMs = 2f, decayMs = 760f, sustainLevel = 0.0f, releaseMs = 320f,
-        hammerClick = 0.52f, baseCutoff = 0.34f, filterResonance = 0.38f, filterEnvAmount = 0.62f,
-        vibratoDepth = 0.0020f, pwmDepth = 0.18f, glideSpeed = 0.015f, reverbSend = 0.42f,
-        chorusOn = true, delayOn = true,
+        id = "cm_10_vibraphone", name = "VIBRAPHONE", category = "MALLET",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 1250f, sustainLevel = 0.0f, releaseMs = 520f,
+        baseCutoff = 0.68f, filterResonance = 0.15f, filterEnvAmount = 0.38f,
+        vibratoDepth = 0.0015f, tremoloDepth = 0.55f, glideSpeed = 0.070f, reverbSend = 0.48f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.30f, detuneCents = -3, octShift = 0, pan = -0.35f, level = 0.95f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0.15f, detuneCents = 3, octShift = 0, pan = 0.35f, level = 0.88f),
-            VoicePresetData(engine = 5, fmRatioIndex = 2, fmDepth = 0.25f, detuneCents = -7, octShift = 0, pan = -0.65f, level = 0.86f),
-            VoicePresetData(engine = 5, fmRatioIndex = 1, fmDepth = 0.22f, detuneCents = 7, octShift = 0, pan = 0.65f, level = 0.84f)
+            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.45f, morph = 0.65f, detuneCents = 0, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.48f, morph = 0.60f, detuneCents = -3, octShift = 0, pan = 0.30f, level = 0.90f),
+            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.40f, morph = 0.55f, detuneCents = 3, octShift = 0, pan = -0.60f, level = 0.85f),
+            VoicePresetData(engine = 4, fmRatioIndex = 5, timbre = 0.35f, morph = 0.50f, detuneCents = 5, octShift = 0, pan = 0.60f, level = 0.78f)
         )
     ),
-    // 11. 60s COMBO ORGAN (Vox Continental / Farfisa Transistor Organ)
+    // 11. MARIMBA (Wooden Hollow Resonator Mallet)
     SynthPreset(
-        id = "hc_11_organ", name = "60s ORGAN", category = "ORGAN",
-        adsrMode = 0, attackMs = 4f, decayMs = 200f, sustainLevel = 0.95f, releaseMs = 110f,
-        hammerClick = 0.28f, baseCutoff = 0.62f, filterResonance = 0.20f, filterEnvAmount = 0.10f,
-        vibratoDepth = 0.0038f, pwmDepth = 0.25f, glideSpeed = 0.070f, reverbSend = 0.34f,
-        chorusOn = true, delayOn = false,
+        id = "cm_11_marimba", name = "MARIMBA", category = "MALLET",
+        adsrMode = 2, attackMs = 1.0f, decayMs = 360f, sustainLevel = 0.0f, releaseMs = 200f,
+        baseCutoff = 0.46f, filterResonance = 0.32f, filterEnvAmount = 0.64f,
+        vibratoDepth = 0.0f, tremoloDepth = 0.0f, glideSpeed = 0.085f, reverbSend = 0.34f,
+        ensembleOn = false, delayOn = true,
         voices = listOf(
-            VoicePresetData(engine = 2, fmRatioIndex = 1, fmDepth = 0.22f, detuneCents = 0, octShift = 0, pan = 0f, level = 0.92f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0.18f, detuneCents = -4, octShift = 0, pan = -0.45f, level = 0.85f),
-            VoicePresetData(engine = 2, fmRatioIndex = 3, fmDepth = 0.25f, detuneCents = 4, octShift = 0, pan = 0.45f, level = 0.80f),
-            VoicePresetData(engine = 1, fmRatioIndex = 4, fmDepth = 0.15f, detuneCents = 6, octShift = 1, pan = 0f, level = 0.65f)
+            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.62f, morph = 0.25f, detuneCents = 0, octShift = 0, pan = -0.25f, level = 0.95f),
+            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.58f, morph = 0.22f, detuneCents = -3, octShift = 0, pan = 0.25f, level = 0.90f),
+            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.52f, morph = 0.20f, detuneCents = 3, octShift = 0, pan = -0.55f, level = 0.86f),
+            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.55f, morph = 0.24f, detuneCents = 5, octShift = 0, pan = 0.55f, level = 0.82f)
         )
     ),
-    // 12. TAPE KEYS (Wurlitzer / Lo-Fi Warble Keys)
+    // 12. FUNK CLAVINET (Crisp Karplus-Strong Funk Clav)
     SynthPreset(
-        id = "hc_12_tapekeys", name = "TAPE KEYS", category = "KEYS",
-        adsrMode = 3, attackMs = 3f, decayMs = 950f, sustainLevel = 0.18f, releaseMs = 360f,
-        hammerClick = 0.38f, baseCutoff = 0.32f, filterResonance = 0.32f, filterEnvAmount = 0.48f,
-        vibratoDepth = 0.0048f, pwmDepth = 0.20f, glideSpeed = 0.025f, reverbSend = 0.38f,
-        chorusOn = true, delayOn = true,
+        id = "cm_12_clavinet", name = "FUNK CLAVINET", category = "KEYS",
+        adsrMode = 2, attackMs = 1.0f, decayMs = 620f, sustainLevel = 0.0f, releaseMs = 180f,
+        baseCutoff = 0.64f, filterResonance = 0.46f, filterEnvAmount = 0.68f,
+        vibratoDepth = 0.0005f, tremoloDepth = 0.0f, glideSpeed = 0.080f, reverbSend = 0.24f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 2, fmRatioIndex = 1, fmDepth = 0.26f, detuneCents = -5, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 1, fmDepth = 0.34f, detuneCents = 5, octShift = 0, pan = 0.30f, level = 0.88f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0.18f, detuneCents = -11, octShift = 0, pan = -0.65f, level = 0.84f),
-            VoicePresetData(engine = 4, fmRatioIndex = 3, fmDepth = 0.22f, detuneCents = 11, octShift = 0, pan = 0.65f, level = 0.76f)
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.92f, morph = 0.52f, detuneCents = -2, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.90f, morph = 0.50f, detuneCents = 2, octShift = 0, pan = 0.30f, level = 0.92f),
+            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.82f, morph = 0.45f, detuneCents = -4, octShift = 0, pan = -0.60f, level = 0.84f),
+            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.88f, morph = 0.48f, detuneCents = 4, octShift = 0, pan = 0.60f, level = 0.84f)
         )
     ),
-    // 13. CHOIR PAD (Vocal Formant Synth Pad)
+    // 13. WURLI REEDS (Warm Reed E-Piano + Tremolo)
     SynthPreset(
-        id = "hc_13_choir", name = "CHOIR PAD", category = "SYNTH PAD",
-        adsrMode = 1, attackMs = 460f, decayMs = 900f, sustainLevel = 0.90f, releaseMs = 920f,
-        hammerClick = 0f, baseCutoff = 0.36f, filterResonance = 0.52f, filterEnvAmount = 0.25f,
-        vibratoDepth = 0.0028f, pwmDepth = 0.48f, glideSpeed = 0.0030f, reverbSend = 0.62f,
-        chorusOn = true, delayOn = true,
+        id = "cm_13_wurli", name = "WURLI REEDS", category = "KEYS",
+        adsrMode = 3, attackMs = 2f, decayMs = 1050f, sustainLevel = 0.16f, releaseMs = 340f,
+        baseCutoff = 0.42f, filterResonance = 0.30f, filterEnvAmount = 0.52f,
+        vibratoDepth = 0.0012f, tremoloDepth = 0.52f, glideSpeed = 0.040f, reverbSend = 0.30f,
+        ensembleOn = false, delayOn = false,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0.22f, detuneCents = -8, octShift = 0, pan = -0.55f, level = 0.90f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0.22f, detuneCents = 8, octShift = 0, pan = 0.55f, level = 0.90f),
-            VoicePresetData(engine = 2, fmRatioIndex = 3, fmDepth = 0.28f, detuneCents = -14, octShift = 0, pan = -0.80f, level = 0.82f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, fmDepth = 0.20f, detuneCents = 14, octShift = 1, pan = 0.80f, level = 0.68f)
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.64f, morph = 0.22f, detuneCents = -3, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.60f, morph = 0.25f, detuneCents = 3, octShift = 0, pan = 0.30f, level = 0.90f),
+            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.48f, morph = 0.20f, detuneCents = -6, octShift = 0, pan = -0.60f, level = 0.84f),
+            VoicePresetData(engine = 3, fmRatioIndex = 3, timbre = 0.52f, morph = 0.18f, detuneCents = 6, octShift = 0, pan = 0.60f, level = 0.78f)
         )
     ),
-    // 14. MARIMBA (Wooden Percussive Mallet Pluck)
+    // 14. CRYSTAL BELLS (Chord Machine FM3 Ambient Shimmer Bells)
     SynthPreset(
-        id = "hc_14_marimba", name = "MARIMBA", category = "MALLET",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 320f, sustainLevel = 0.0f, releaseMs = 190f,
-        hammerClick = 0.62f, baseCutoff = 0.38f, filterResonance = 0.34f, filterEnvAmount = 0.65f,
-        vibratoDepth = 0.0005f, pwmDepth = 0f, glideSpeed = 0.070f, reverbSend = 0.36f,
-        chorusOn = false, delayOn = true,
+        id = "cm_14_bells", name = "CRYSTAL BELLS", category = "MALLET",
+        adsrMode = 2, attackMs = 1.5f, decayMs = 1350f, sustainLevel = 0.0f, releaseMs = 680f,
+        baseCutoff = 0.74f, filterResonance = 0.22f, filterEnvAmount = 0.40f,
+        vibratoDepth = 0.0025f, tremoloDepth = 0.25f, glideSpeed = 0.030f, reverbSend = 0.62f,
+        ensembleOn = true, delayOn = true,
         voices = listOf(
-            VoicePresetData(engine = 2, fmRatioIndex = 4, fmDepth = 0.42f, detuneCents = 0, octShift = 0, pan = -0.25f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, fmDepth = 0.38f, detuneCents = -4, octShift = 0, pan = 0.25f, level = 0.88f),
-            VoicePresetData(engine = 2, fmRatioIndex = 2, fmDepth = 0.30f, detuneCents = 4, octShift = 0, pan = -0.55f, level = 0.85f),
-            VoicePresetData(engine = 2, fmRatioIndex = 4, fmDepth = 0.35f, detuneCents = 6, octShift = 0, pan = 0.55f, level = 0.80f)
+            VoicePresetData(engine = 5, fmRatioIndex = 3, timbre = 0.52f, morph = 0.60f, detuneCents = -5, octShift = 0, pan = -0.45f, level = 0.92f),
+            VoicePresetData(engine = 5, fmRatioIndex = 5, timbre = 0.48f, morph = 0.65f, detuneCents = 5, octShift = 0, pan = 0.45f, level = 0.90f),
+            VoicePresetData(engine = 5, fmRatioIndex = 6, timbre = 0.42f, morph = 0.70f, detuneCents = -11, octShift = 0, pan = -0.80f, level = 0.82f),
+            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.35f, morph = 0.55f, detuneCents = 11, octShift = 1, pan = 0.80f, level = 0.72f)
         )
     ),
-    // 15. 8-BIT CHIP (Pocket Arcade Chiptune Synth)
+    // 15.TAPE MELLOTRON (Vintage Lo-Fi Flute/String Tape Choir)
     SynthPreset(
-        id = "hc_15_chip", name = "8-BIT CHIP", category = "CHIPTUNE",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 440f, sustainLevel = 0.0f, releaseMs = 200f,
-        hammerClick = 0.35f, baseCutoff = 0.82f, filterResonance = 0.20f, filterEnvAmount = 0.35f,
-        vibratoDepth = 0f, pwmDepth = 0.40f, glideSpeed = 0.090f, reverbSend = 0.22f,
-        chorusOn = false, delayOn = true,
+        id = "cm_15_mellotron", name = "TAPE MELLOTRON", category = "ENSEMBLE",
+        adsrMode = 1, attackMs = 280f, decayMs = 800f, sustainLevel = 0.82f, releaseMs = 620f,
+        baseCutoff = 0.30f, filterResonance = 0.42f, filterEnvAmount = 0.28f,
+        vibratoDepth = 0.0052f, tremoloDepth = 0.18f, glideSpeed = 0.0040f, reverbSend = 0.46f,
+        ensembleOn = true, delayOn = true,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 0, octShift = 0, pan = -0.35f, level = 0.92f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0f, detuneCents = -5, octShift = 0, pan = 0.35f, level = 0.88f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0f, detuneCents = 5, octShift = 0, pan = -0.65f, level = 0.85f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, fmDepth = 0f, detuneCents = 0, octShift = 1, pan = 0.65f, level = 0.72f)
+            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.42f, morph = 0.65f, detuneCents = -9, octShift = 0, pan = -0.50f, level = 0.90f),
+            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.32f, morph = 0.50f, detuneCents = 9, octShift = 0, pan = 0.50f, level = 0.88f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.38f, morph = 0.60f, detuneCents = -16, octShift = 0, pan = -0.80f, level = 0.82f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.30f, morph = 0.40f, detuneCents = 16, octShift = 0, pan = 0.80f, level = 0.80f)
         )
     ),
-    // 16. BASS CHORD (Deep Sub-Driven House/Funk Chord Stack)
+    // 16. ANALOG PLUCK (Short Resonant Per-Voice Filter Pluck)
     SynthPreset(
-        id = "hc_16_basschord", name = "BASS CHORD", category = "PLUCK",
-        adsrMode = 2, attackMs = 2f, decayMs = 520f, sustainLevel = 0.0f, releaseMs = 260f,
-        hammerClick = 0.45f, baseCutoff = 0.22f, filterResonance = 0.52f, filterEnvAmount = 0.72f,
-        vibratoDepth = 0.0010f, pwmDepth = 0.22f, glideSpeed = 0.009f, reverbSend = 0.30f,
-        chorusOn = true, delayOn = true,
+        id = "cm_16_analogpluck", name = "ANALOG PLUCK", category = "PLUCK",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 420f, sustainLevel = 0.0f, releaseMs = 220f,
+        baseCutoff = 0.16f, filterResonance = 0.58f, filterEnvAmount = 0.82f,
+        vibratoDepth = 0.0010f, tremoloDepth = 0.0f, glideSpeed = 0.012f, reverbSend = 0.38f,
+        ensembleOn = true, delayOn = true,
         voices = listOf(
-            VoicePresetData(engine = 0, fmRatioIndex = 1, fmDepth = 0.18f, detuneCents = 0, octShift = -1, pan = 0f, level = 1.0f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, fmDepth = 0.12f, detuneCents = -10, octShift = 0, pan = -0.60f, level = 0.88f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, fmDepth = 0f, detuneCents = 10, octShift = 0, pan = 0.60f, level = 0.88f),
-            VoicePresetData(engine = 0, fmRatioIndex = 2, fmDepth = 0.15f, detuneCents = 14, octShift = 0, pan = 0f, level = 0.78f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.70f, morph = 0.50f, detuneCents = -6, octShift = 0, pan = -0.40f, level = 0.95f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, morph = 0.45f, detuneCents = 6, octShift = 0, pan = 0.40f, level = 0.92f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.75f, morph = 0.40f, detuneCents = -12, octShift = 0, pan = -0.75f, level = 0.88f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.70f, morph = 0.55f, detuneCents = 12, octShift = 0, pan = 0.75f, level = 0.88f)
         )
     )
 )
 
-// --- 8-WEGE HICHORD JOYSTICK-RICHTUNGEN ---
+// --- 8-WEGE JOYSTICK-RICHTUNGEN ---
 enum class JoyChordZone(val shortLabel: String, val desc: String) {
     CENTER("NORM", "DIATONIC"),
     UP("FLIP", "MAJ ↔ MIN"),
@@ -461,8 +463,8 @@ fun polyBlep(t: Float, dt: Float): Float {
     }
 }
 
-// --- HICHORD ENGINE V5: PER-VOICE ADSR, HAMMER TRANSIENT, KARPLUS STRING & ZERO-MISS TRIGGER ---
-class HiChordEngine {
+// --- WOLFPUNK / DAISY-SP CHORD MACHINE AUDIO ENGINE ---
+class WolfChordEngine {
     private val sampleRate = 44100
     @Volatile var isRunning = false
     private var audioThread: Thread? = null
@@ -476,22 +478,20 @@ class HiChordEngine {
     @Volatile var gate = false
     @Volatile var bpm = 120
     @Volatile var strumMode = false
-    @Volatile var bassMode = 1 // 0: OFF, 1: ROOT, 2: SLASH
-    @Volatile var filterWheel = 0.52f
+    @Volatile var bassMode = 1
+    @Volatile var filterWheel = 0.58f
 
-    // Klangparameter pro Preset
     @Volatile var adsrMode = 3
-    @Volatile var attackMs = 3f
-    @Volatile var decayMs = 1100f
-    @Volatile var sustainLevel = 0.15f
-    @Volatile var releaseMs = 380f
-    @Volatile var hammerClick = 0.35f
-    @Volatile var baseCutoff = 0.46f
-    @Volatile var filterResonance = 0.30f
+    @Volatile var attackMs = 2f
+    @Volatile var decayMs = 1400f
+    @Volatile var sustainLevel = 0.12f
+    @Volatile var releaseMs = 420f
+    @Volatile var baseCutoff = 0.62f
+    @Volatile var filterResonance = 0.22f
     @Volatile var filterEnvAmount = 0.45f
-    @Volatile var vibratoDepth = 0.0018f
-    @Volatile var pwmDepth = 0.20f
-    @Volatile var glideSpeed = 0.025f
+    @Volatile var vibratoDepth = 0.0012f
+    @Volatile var tremoloDepth = 0.35f
+    @Volatile var glideSpeed = 0.040f
     @Volatile var reverbSend = 0.35f
 
     @Volatile var arpMode = 0
@@ -500,48 +500,62 @@ class HiChordEngine {
     @Volatile var fxDelay = false
     @Volatile var fxCrush = false
     @Volatile var fxStutter = false
-    @Volatile var fxChorus = true
+    @Volatile var fxChorus = false
     @Volatile var fxPump = false
     @Volatile var fxReverb = true
 
     @Volatile private var syncResetRequested = false
-    // Zähler statt simplen Booleans verhindert verschluckte Tasten-Trigger zu 100%!
     @Volatile private var attackTriggerCount = 0
 
     val voices = Array(4) { v ->
         VoiceConfig(
-            engine = 4,
+            engine = 3,
             fmRatioIndex = 1,
-            fmDepth = 0.30f,
-            detuneCents = when (v) { 0 -> 0; 1 -> -6; 2 -> 6; else -> 10 },
+            timbre = 0.42f,
+            morph = 0.35f,
+            detuneCents = when (v) { 0 -> -2; 1 -> 3; 2 -> -4; else -> 5 },
             octShift = 0,
-            pan = when (v) { 0 -> 0f; 1 -> -0.55f; 2 -> 0.55f; else -> 0.2f },
-            level = 0.85f
+            pan = when (v) { 0 -> -0.35f; 1 -> 0.35f; 2 -> -0.60f; else -> 0.60f },
+            level = 0.88f
         )
     }
 
     val scopeBuffer = FloatArray(128)
 
-    // 5 Sub-Oszillator-Phasen pro Stimme für echten 5-Saw Hypersaw-Cluster
-    private val oscPhases = Array(4) { FloatArray(5) { Random.nextFloat() } }
+    // Oszillator-Phasen & Analog-Drift pro Stimme
+    private val oscPhases = Array(4) { FloatArray(4) { Random.nextFloat() } }
     private val modPhases = FloatArray(4) { Random.nextFloat() }
+    private val tinePhases = FloatArray(4) { Random.nextFloat() }
+    private val voiceDrift = FloatArray(4) { 1f }
 
-    // Eigene unabhängige ADSR- & Filter-Hüllkurve pro Stimme (verhindert den statischen Kirchenorgel-Effekt!)
-    private val voiceStage = IntArray(4) { 0 }
-    private val voiceAmpEnv = FloatArray(4) { 0f }
-    private val voiceHarmEnv = FloatArray(4) { 0f }
-    private val voiceClickEnv = FloatArray(4) { 0f }
-    private val voiceDelayCountdown = IntArray(4) { 0 }
+    // ECHTE KARPLUS-STRONG WAVEGUIDE DELAY-LINE PRO STIMME (2048 Samples)
+    private val ksDelayLines = Array(4) { FloatArray(2048) }
+    private val ksWritePos = IntArray(4)
+    private val ksLpState = FloatArray(4)
+    private val ksExciteRemaining = IntArray(4)
+
+    // EIGENES 2-POL RESONANZ-FILTER (SVF) PRO STIMME!
+    private val voiceSvfLow = FloatArray(4)
+    private val voiceSvfBand = FloatArray(4)
+
+    // Eigene ADSR- & Transienten-Hüllkurve pro Stimme
+    private val voiceStage = IntArray(4)
+    private val voiceAmpEnv = FloatArray(4)
+    private val voiceFltEnv = FloatArray(4)
+    private val voiceTineEnv = FloatArray(4)
+    private val voiceStrumWait = IntArray(4)
 
     private var bassPhase = 0f
     private var lfoPhase = 0f
-    private var pwmLfoPhase = 0f
+    private var tremPhase = 0f
+    private var pwmPhase = 0f
 
-    // 12dB Chamberlin SVF Filter
-    private var svfLowL = 0f
-    private var svfBandL = 0f
-    private var svfLowR = 0f
-    private var svfBandR = 0f
+    // 3-Phasen Solina/Juno BBD Ensemble Chorus
+    private val bbdBufL = FloatArray(2048)
+    private val bbdBufR = FloatArray(2048)
+    private var bbdWritePos = 0
+    private var bbdLfoSlow = 0f
+    private var bbdLfoFast = 0f
 
     // Stereo Schroeder Reverb
     private val comb1 = FloatArray(1499)
@@ -553,12 +567,6 @@ class HiChordEngine {
     private val allpass2 = FloatArray(223)
     private var aPos1 = 0; private var aPos2 = 0
 
-    // Stereo Chorus Delay Line (echter modulierter Juno-Chorus statt starrem Oszillator!)
-    private val chorusBufL = FloatArray(2048)
-    private val chorusBufR = FloatArray(2048)
-    private var chorusWritePos = 0
-    private var chorusLfo = 0f
-
     // Stereo Ping-Pong Tape Delay
     private val delayBufL = FloatArray(44100)
     private val delayBufR = FloatArray(44100)
@@ -568,7 +576,6 @@ class HiChordEngine {
     private var crushedL = 0f
     private var crushedR = 0f
 
-    // Atomare Methode für Akkord-Trigger: Setzt Frequenzen, Gate und Attack gleichzeitig (Null ausgefallene Tasten!)
     fun playChord(freqs: FloatArray, bassFreq: Float, retriggerAttack: Boolean) {
         for (i in 0..3) targetFreqs[i] = freqs[i]
         targetBassFreq = bassFreq
@@ -591,21 +598,10 @@ class HiChordEngine {
     fun applyAdsrMacro(mode: Int) {
         adsrMode = mode.coerceIn(0, 3)
         when (adsrMode) {
-            0 -> { // SUSTAIN (Synth / Organ)
-                attackMs = 8f; decayMs = 400f; sustainLevel = 0.85f; releaseMs = 280f
-            }
-            1 -> { // SWELL (Lush Pad / Strings)
-                attackMs = 460f; decayMs = 900f; sustainLevel = 0.88f; releaseMs = 920f
-            }
-            2 -> { // PLUCK (Percussive Decay auf 0.0f)
-                attackMs = 1.5f; decayMs = 480f; sustainLevel = 0.0f; releaseMs = 260f
-                filterEnvAmount = filterEnvAmount.coerceAtLeast(0.55f)
-                hammerClick = hammerClick.coerceAtLeast(0.35f)
-            }
-            3 -> { // KEYS (E-Piano / Piano Decay mit warmem Nachklang)
-                attackMs = 2.5f; decayMs = 1100f; sustainLevel = 0.16f; releaseMs = 380f
-                hammerClick = hammerClick.coerceAtLeast(0.30f)
-            }
+            0 -> { attackMs = 6f; decayMs = 450f; sustainLevel = 0.80f; releaseMs = 300f }
+            1 -> { attackMs = 480f; decayMs = 950f; sustainLevel = 0.88f; releaseMs = 920f }
+            2 -> { attackMs = 1.2f; decayMs = 650f; sustainLevel = 0.0f; releaseMs = 280f }
+            3 -> { attackMs = 2.0f; decayMs = 1300f; sustainLevel = 0.14f; releaseMs = 400f }
         }
         attackTriggerCount++
     }
@@ -616,23 +612,23 @@ class HiChordEngine {
         decayMs = preset.decayMs
         sustainLevel = preset.sustainLevel
         releaseMs = preset.releaseMs
-        hammerClick = preset.hammerClick
         baseCutoff = preset.baseCutoff
         filterWheel = preset.baseCutoff
         filterResonance = preset.filterResonance
         filterEnvAmount = preset.filterEnvAmount
         vibratoDepth = preset.vibratoDepth
-        pwmDepth = preset.pwmDepth
+        tremoloDepth = preset.tremoloDepth
         glideSpeed = preset.glideSpeed
         reverbSend = preset.reverbSend
-        fxChorus = preset.chorusOn
+        fxChorus = preset.ensembleOn
         fxDelay = preset.delayOn
         for (v in 0..3) {
             val vp = preset.voices[v]
             voices[v].apply {
                 engine = vp.engine
                 fmRatioIndex = vp.fmRatioIndex
-                fmDepth = vp.fmDepth
+                timbre = vp.timbre
+                morph = vp.morph
                 detuneCents = vp.detuneCents
                 octShift = vp.octShift
                 pan = vp.pan
@@ -645,17 +641,16 @@ class HiChordEngine {
     fun snapshotToPreset(id: String, name: String): SynthPreset {
         val vData = (0..3).map { v ->
             val vc = voices[v]
-            VoicePresetData(vc.engine, vc.fmRatioIndex, vc.fmDepth, vc.detuneCents, vc.octShift, vc.pan, vc.level)
+            VoicePresetData(vc.engine, vc.fmRatioIndex, vc.timbre, vc.morph, vc.detuneCents, vc.octShift, vc.pan, vc.level)
         }
         return SynthPreset(
             id = id, name = name, category = "USER PATCH",
             adsrMode = adsrMode, attackMs = attackMs, decayMs = decayMs,
             sustainLevel = sustainLevel, releaseMs = releaseMs,
-            hammerClick = hammerClick, baseCutoff = filterWheel,
-            filterResonance = filterResonance, filterEnvAmount = filterEnvAmount,
-            vibratoDepth = vibratoDepth, pwmDepth = pwmDepth,
-            glideSpeed = glideSpeed, reverbSend = reverbSend,
-            chorusOn = fxChorus, delayOn = fxDelay,
+            baseCutoff = filterWheel, filterResonance = filterResonance,
+            filterEnvAmount = filterEnvAmount, vibratoDepth = vibratoDepth,
+            tremoloDepth = tremoloDepth, glideSpeed = glideSpeed,
+            reverbSend = reverbSend, ensembleOn = fxChorus, delayOn = fxDelay,
             voices = vData, isUser = true
         )
     }
@@ -663,11 +658,33 @@ class HiChordEngine {
     fun triggerChordAttack() { attackTriggerCount++ }
     fun resetClockSync() { syncResetRequested = true }
 
+    private fun exciteVoice(v: Int, freq: Float) {
+        voiceStage[v] = 1
+        voiceFltEnv[v] = 1.0f
+        voiceTineEnv[v] = 1.0f
+        // Analog-Drift pro Anschlag leicht variieren -> verhindert jeden Phasen-Lock!
+        voiceDrift[v] = 1f + (Random.nextFloat() - 0.5f) * 0.0016f
+
+        // Karplus-Strong Delay-Line mit gefiltertem Hammer-/Zupf-Impuls füllen
+        val period = (sampleRate / freq.coerceAtLeast(35f)).toInt().coerceIn(16, 1024)
+        val line = ksDelayLines[v]
+        var smoothNoise = 0f
+        val brightness = voices[v].timbre.coerceIn(0.15f, 0.98f)
+        for (idx in 0 until period) {
+            val pos = (ksWritePos[v] - idx + line.size) % line.size
+            val rawN = (Random.nextFloat() * 2f - 1f)
+            val bodyWave = sin(idx.toFloat() / period.toFloat() * 2f * PI.toFloat())
+            smoothNoise += brightness * ((rawN * 0.7f + bodyWave * 0.5f) - smoothNoise)
+            line[pos] = smoothNoise
+        }
+        ksExciteRemaining[v] = (sampleRate * 0.0035f).toInt() // 3.5ms Pick/Hammer Burst
+    }
+
     @Synchronized
     fun start() {
         if (isRunning) return
         isRunning = true
-        audioThread = thread(start = true, isDaemon = true, name = "HiChordAudioThread") {
+        audioThread = thread(start = true, isDaemon = true, name = "WolfChordAudioThread") {
             val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(2048)
             val track = AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
@@ -684,24 +701,27 @@ class HiChordEngine {
             var arpVoice = 0
             val pingPongOrder = intArrayOf(0, 1, 2, 3, 2, 1)
             var lastHandledAttackCount = attackTriggerCount
-            val superSawSpread = floatArrayOf(0.989f, 0.996f, 1.0f, 1.0045f, 1.0115f)
 
             while (isRunning) {
                 val currentBpm = bpm.coerceIn(60, 200)
                 val quarterSamples = ((sampleRate * 60) / currentBpm).coerceAtLeast(2000)
                 val sixteenthSamples = (quarterSamples / 4).coerceAtLeast(500)
                 val delaySamples = (sixteenthSamples * 3).coerceIn(1000, delayBufL.size - 1)
-                val currentGlide = glideSpeed.coerceIn(0.0005f, 0.09f)
+                val currentGlide = glideSpeed.coerceIn(0.0005f, 0.095f)
 
-                val attSamples = (attackMs * 0.001f * sampleRate).coerceAtLeast(12f)
+                val attSamples = (attackMs * 0.001f * sampleRate).coerceAtLeast(10f)
                 val attackStep = 1f / attSamples
                 val decSamples = (decayMs * 0.001f * sampleRate).coerceAtLeast(250f)
                 val decayMul = 0.001f.pow(1f / decSamples)
-                val relSamples = (releaseMs * 0.001f * sampleRate).coerceAtLeast(200f)
+                val relSamples = (releaseMs * 0.001f * sampleRate).coerceAtLeast(180f)
                 val releaseMul = 0.001f.pow(1f / relSamples)
-                // Obertöne klingen schneller ab als der Grundton (wie bei echten Instrumenten!)
-                val harmDecayMul = 0.001f.pow(1f / (decSamples * 0.42f))
+                val fltDecayMul = 0.001f.pow(1f / (decSamples * 0.38f))
+                val tineDecayMul = 0.001f.pow(1f / (sampleRate * 0.14f)) // Schneller 140ms Tine-Decay für Rhodes/Bells!
                 val targetSustain = if (adsrMode == 2) 0.0f else sustainLevel.coerceIn(0f, 1f)
+
+                val wheelNorm = filterWheel.coerceIn(0.06f, 1.0f)
+                val baseF = 0.035f + wheelNorm * wheelNorm * 0.56f
+                val svfQ = (0.88f - filterResonance.coerceIn(0f, 0.65f)).coerceIn(0.26f, 0.88f)
 
                 if (syncResetRequested) {
                     syncResetRequested = false
@@ -714,12 +734,16 @@ class HiChordEngine {
                     sampleCounter++
                     beatSampleCounter = (beatSampleCounter + 1) % quarterSamples
 
-                    lfoPhase = (lfoPhase + 5.1f / sampleRate) % 1f
-                    pwmLfoPhase = (pwmLfoPhase + 0.85f / sampleRate) % 1f
-                    chorusLfo = (chorusLfo + 0.65f / sampleRate) % 1f
+                    lfoPhase = (lfoPhase + 5.2f / sampleRate) % 1f
+                    tremPhase = (tremPhase + 4.4f / sampleRate) % 1f
+                    pwmPhase = (pwmPhase + 0.9f / sampleRate) % 1f
+                    bbdLfoSlow = (bbdLfoSlow + 0.58f / sampleRate) % 1f
+                    bbdLfoFast = (bbdLfoFast + 5.6f / sampleRate) % 1f
 
                     val vibratoFactor = 1f + sin(lfoPhase * 2f * PI.toFloat()) * vibratoDepth
-                    val pwmWidth = (0.5f + sin(pwmLfoPhase * 2f * PI.toFloat()) * pwmDepth * 0.38f).coerceIn(0.12f, 0.88f)
+                    val pwmMod = sin(pwmPhase * 2f * PI.toFloat()) * 0.35f
+                    val tremL = 1f - tremoloDepth * 0.45f * (0.5f + 0.5f * sin(tremPhase * 2f * PI.toFloat()))
+                    val tremR = 1f - tremoloDepth * 0.45f * (0.5f - 0.5f * sin(tremPhase * 2f * PI.toFloat()))
 
                     if (sampleCounter >= sixteenthSamples) {
                         sampleCounter = 0
@@ -734,89 +758,63 @@ class HiChordEngine {
                         }
 
                         if (arpMode > 0 && gate) {
-                            voiceStage[0] = 1
-                            voiceHarmEnv[0] = 1.0f
-                            voiceClickEnv[0] = hammerClick
+                            val tFreq = targetFreqs[arpVoice].coerceAtLeast(110f)
+                            exciteVoice(0, tFreq)
                         }
                     }
 
-                    // Prüfe, ob ein neuer Akkord angeschlagen wurde
                     val currentTrig = attackTriggerCount
                     if (currentTrig != lastHandledAttackCount) {
                         lastHandledAttackCount = currentTrig
-                        // Mikro-Humanizing (2ms Versatz pro Stimme) oder echter Gitarren-Strum (30ms pro Saite)
-                        val delayPerVoiceSamples = if (strumMode) (sampleRate * 0.030f).toInt() else (sampleRate * 0.0018f).toInt()
+                        // Natürliches Mikro-Strumming (3.5ms) oder Gitarren-Strum (32ms)
+                        val strumStepSamples = if (strumMode) (sampleRate * 0.032f).toInt() else (sampleRate * 0.0035f).toInt()
                         for (v in 0..3) {
-                            voiceDelayCountdown[v] = v * delayPerVoiceSamples
-                            if (voiceDelayCountdown[v] == 0) {
-                                voiceStage[v] = 1
-                                voiceHarmEnv[v] = 1.0f
-                                voiceClickEnv[v] = hammerClick
-                                // Leicht zufällige Startphase verhindert starren Kirchenorgel-Phasen-Lock!
-                                oscPhases[v][0] = (oscPhases[v][0] + Random.nextFloat() * 0.15f) % 1f
+                            voiceStrumWait[v] = v * strumStepSamples
+                            if (voiceStrumWait[v] == 0) {
+                                val f = targetFreqs[v] * 2f.pow(voices[v].octShift.toFloat())
+                                exciteVoice(v, f.coerceAtLeast(110f))
                             }
                         }
                     }
 
                     var mixL = 0f
                     var mixR = 0f
-                    var maxHarmEnv = 0f
-                    var avgAmpEnv = 0f
+                    var activeEnvSum = 0f
 
                     if (arpMode > 0) {
-                        // ARPEGGIATOR-MODUS
                         if (!gate && voiceStage[0] != 0 && voiceStage[0] != 4) voiceStage[0] = 4
-                        when (voiceStage[0]) {
-                            1 -> {
-                                voiceAmpEnv[0] += attackStep
-                                if (voiceAmpEnv[0] >= 1.0f) { voiceAmpEnv[0] = 1.0f; voiceStage[0] = 2 }
-                            }
-                            2 -> {
-                                voiceAmpEnv[0] = targetSustain + (voiceAmpEnv[0] - targetSustain) * decayMul
-                                if (abs(voiceAmpEnv[0] - targetSustain) < 0.0008f) {
-                                    voiceAmpEnv[0] = targetSustain
-                                    voiceStage[0] = if (targetSustain <= 0.001f) 0 else 3
-                                }
-                            }
-                            3 -> {
-                                voiceAmpEnv[0] = targetSustain
-                                if (!gate) voiceStage[0] = 4
-                            }
-                            4 -> {
-                                voiceAmpEnv[0] *= releaseMul
-                                if (voiceAmpEnv[0] < 0.0004f) { voiceAmpEnv[0] = 0f; voiceStage[0] = 0 }
-                            }
-                        }
-                        voiceHarmEnv[0] *= harmDecayMul
-                        voiceClickEnv[0] *= 0.986f
+                        stepVoiceEnvelope(0, attackStep, decayMul, releaseMul, targetSustain, fltDecayMul, tineDecayMul)
 
                         val aEnv = voiceAmpEnv[0]
-                        val hEnv = voiceHarmEnv[0]
-                        maxHarmEnv = hEnv
-                        avgAmpEnv = aEnv
-
-                        if (aEnv > 0.0004f) {
+                        activeEnvSum = aEnv
+                        if (aEnv > 0.0003f) {
                             val vc = voices[arpVoice]
                             val octMult = 2f.pow(vc.octShift.toFloat())
                             val rawTarget = targetFreqs[arpVoice] * octMult * 2f.pow(vc.detuneCents / 1200f) * vibratoFactor
                             if (rawTarget > 20f) {
                                 if (arpSmoothFreq <= 20f) arpSmoothFreq = rawTarget
                                 arpSmoothFreq += (rawTarget - arpSmoothFreq) * (currentGlide * 1.8f)
-                                val sig = renderVoiceSample(0, vc, arpSmoothFreq, aEnv, hEnv, voiceClickEnv[0], pwmWidth, superSawSpread)
+
+                                val rawSig = computeChordMachineVoice(0, vc, arpSmoothFreq, aEnv, voiceFltEnv[0], voiceTineEnv[0], pwmMod)
+                                // Eigenes 2-Pol SVF Filter für den Arpeggiator
+                                val fCut = (baseF + voiceFltEnv[0] * filterEnvAmount * 0.55f).coerceIn(0.03f, 0.78f)
+                                voiceSvfLow[0] += fCut * voiceSvfBand[0]
+                                val high = rawSig - voiceSvfLow[0] - svfQ * voiceSvfBand[0]
+                                voiceSvfBand[0] += fCut * high
+                                val filtered = voiceSvfLow[0]
+
                                 val panNorm = ((vc.pan + 1f) * 0.5f).coerceIn(0f, 1f)
-                                mixL += sig * sqrt(1f - panNorm) * 1.35f
-                                mixR += sig * sqrt(panNorm) * 1.35f
+                                mixL += filtered * sqrt(1f - panNorm) * 1.35f
+                                mixR += filtered * sqrt(panNorm) * 1.35f
                             }
                         }
                     } else {
-                        // 4-STIMMIGER POLYPHONER CHORD-MODUS (Jede Stimme mit eigener ADSR & eigenem Charakter!)
                         for (v in 0 until 4) {
-                            if (voiceDelayCountdown[v] > 0) {
-                                voiceDelayCountdown[v]--
-                                if (voiceDelayCountdown[v] == 0 && gate) {
-                                    voiceStage[v] = 1
-                                    voiceHarmEnv[v] = 1.0f
-                                    voiceClickEnv[v] = hammerClick
+                            if (voiceStrumWait[v] > 0) {
+                                voiceStrumWait[v]--
+                                if (voiceStrumWait[v] == 0 && gate) {
+                                    val f = targetFreqs[v] * 2f.pow(voices[v].octShift.toFloat())
+                                    exciteVoice(v, f.coerceAtLeast(110f))
                                 }
                             }
 
@@ -824,63 +822,50 @@ class HiChordEngine {
                                 voiceStage[v] = 4
                             }
 
-                            when (voiceStage[v]) {
-                                1 -> {
-                                    voiceAmpEnv[v] += attackStep
-                                    if (voiceAmpEnv[v] >= 1.0f) { voiceAmpEnv[v] = 1.0f; voiceStage[v] = 2 }
-                                }
-                                2 -> {
-                                    voiceAmpEnv[v] = targetSustain + (voiceAmpEnv[v] - targetSustain) * decayMul
-                                    if (abs(voiceAmpEnv[v] - targetSustain) < 0.0008f) {
-                                        voiceAmpEnv[v] = targetSustain
-                                        voiceStage[v] = if (targetSustain <= 0.001f) 0 else 3
-                                    }
-                                }
-                                3 -> {
-                                    voiceAmpEnv[v] = targetSustain
-                                    if (!gate) voiceStage[v] = 4
-                                }
-                                4 -> {
-                                    voiceAmpEnv[v] *= releaseMul
-                                    if (voiceAmpEnv[v] < 0.0004f) { voiceAmpEnv[v] = 0f; voiceStage[v] = 0 }
-                                }
-                            }
-
-                            voiceHarmEnv[v] *= harmDecayMul
-                            voiceClickEnv[v] *= 0.986f
+                            stepVoiceEnvelope(v, attackStep, decayMul, releaseMul, targetSustain, fltDecayMul, tineDecayMul)
 
                             val aEnv = voiceAmpEnv[v]
-                            val hEnv = voiceHarmEnv[v]
-                            if (hEnv > maxHarmEnv) maxHarmEnv = hEnv
-                            avgAmpEnv += aEnv * 0.25f
-
-                            if (aEnv <= 0.0004f) continue
+                            activeEnvSum += aEnv * 0.25f
+                            if (aEnv <= 0.0003f) continue
 
                             val vc = voices[v]
                             val octMult = 2f.pow(vc.octShift.toFloat())
-                            val tFreq = targetFreqs[v] * octMult * 2f.pow(vc.detuneCents / 1200f) * vibratoFactor
+                            val tFreq = targetFreqs[v] * octMult * 2f.pow(vc.detuneCents / 1200f) * vibratoFactor * voiceDrift[v]
                             if (tFreq <= 20f) continue
 
                             if (currentFreqs[v] <= 20f) currentFreqs[v] = tFreq
                             currentFreqs[v] += (tFreq - currentFreqs[v]) * currentGlide
                             val freq = currentFreqs[v]
 
-                            val sig = renderVoiceSample(v, vc, freq, aEnv, hEnv, voiceClickEnv[v], pwmWidth, superSawSpread)
+                            val rawSig = computeChordMachineVoice(v, vc, freq, aEnv, voiceFltEnv[v], voiceTineEnv[v], pwmMod)
+
+                            // EIGENES 2-POL SVF FILTER PRO STIMME (mit Key-Tracking!)
+                            val keyTrack = ((freq - 220f) / 1600f).coerceIn(-0.05f, 0.18f)
+                            val fCut = (baseF + keyTrack + voiceFltEnv[v] * filterEnvAmount * 0.55f).coerceIn(0.03f, 0.78f)
+                            voiceSvfLow[v] += fCut * voiceSvfBand[v]
+                            val high = rawSig - voiceSvfLow[v] - svfQ * voiceSvfBand[v]
+                            voiceSvfBand[v] += fCut * high
+                            val filtered = voiceSvfLow[v]
+
                             val panNorm = ((vc.pan + 1f) * 0.5f).coerceIn(0f, 1f)
-                            mixL += sig * sqrt(1f - panNorm)
-                            mixR += sig * sqrt(panNorm)
+                            mixL += filtered * sqrt(1f - panNorm)
+                            mixR += filtered * sqrt(panNorm)
                         }
                     }
 
-                    // Original HiChord BASS-Oszillator (Warm Filtered Sub-Bass)
-                    if (bassMode > 0 && targetBassFreq > 20f && avgAmpEnv > 0.001f) {
+                    // Stereo Tremolo / Auto-Panning (Rhodes & Vibraphone)
+                    mixL *= tremL
+                    mixR *= tremR
+
+                    // Warm Analog Bass-Voice (OFF / ROOT / SLASH)
+                    if (bassMode > 0 && targetBassFreq > 20f && activeEnvSum > 0.001f) {
                         if (currentBassFreq <= 20f) currentBassFreq = targetBassFreq
                         currentBassFreq += (targetBassFreq - currentBassFreq) * (currentGlide * 1.5f)
                         val bDt = (currentBassFreq / sampleRate).coerceIn(0.0001f, 0.25f)
                         bassPhase = (bassPhase + bDt) % 1f
-                        val bSine = sin(bassPhase * 2f * PI.toFloat()) * 0.72f
-                        val bSaw = ((2f * bassPhase - 1f) - polyBlep(bassPhase, bDt)) * (0.15f + 0.25f * maxHarmEnv)
-                        val bassSig = (bSine + bSaw) * 0.20f * avgAmpEnv
+                        val bSub = sin(bassPhase * 2f * PI.toFloat()) * 0.75f
+                        val bWarmSaw = ((2f * bassPhase - 1f) - polyBlep(bassPhase, bDt)) * 0.22f * baseF
+                        val bassSig = (bSub + bWarmSaw) * 0.20f * activeEnvSum
                         mixL += bassSig
                         mixR += bassSig
                     }
@@ -892,35 +877,26 @@ class HiChordEngine {
                         }
                     }
 
-                    // 12dB Chamberlin SVF Tiefpassfilter mit einstellbarer Resonanz & Pluck-Transient
-                    val wheelNorm = filterWheel.coerceIn(0.06f, 1.0f)
-                    val envBoost = maxHarmEnv * filterEnvAmount * 0.52f
-                    val svfF = (0.045f + (wheelNorm * wheelNorm * 0.56f) + envBoost).coerceIn(0.035f, 0.76f)
-                    val svfQ = (0.85f - filterResonance.coerceIn(0f, 0.65f)).coerceIn(0.28f, 0.85f)
+                    var finalL = mixL
+                    var finalR = mixR
 
-                    svfLowL += svfF * svfBandL
-                    val highL = mixL - svfLowL - svfQ * svfBandL
-                    svfBandL += svfF * highL
-
-                    svfLowR += svfF * svfBandR
-                    val highR = mixR - svfLowR - svfQ * svfBandR
-                    svfBandR += svfF * highR
-
-                    var finalL = svfLowL
-                    var finalR = svfLowR
-
-                    // Echter Stereo Juno-Chorus (Modulierte Delay-Line für seidige Breite ohne Orgel-Starrheit!)
-                    chorusBufL[chorusWritePos] = finalL
-                    chorusBufR[chorusWritePos] = finalR
+                    // 3-Phasen Solina/Juno BBD Ensemble Chorus
+                    bbdBufL[bbdWritePos] = finalL
+                    bbdBufR[bbdWritePos] = finalR
                     if (fxChorus) {
-                        val modSamplesL = 320f + sin(chorusLfo * 2f * PI.toFloat()) * 140f
-                        val modSamplesR = 340f + cos(chorusLfo * 2f * PI.toFloat()) * 140f
-                        val rIdxL = (chorusWritePos - modSamplesL.toInt() + chorusBufL.size) % chorusBufL.size
-                        val rIdxR = (chorusWritePos - modSamplesR.toInt() + chorusBufR.size) % chorusBufR.size
-                        finalL = finalL * 0.72f + chorusBufL[rIdxL] * 0.45f
-                        finalR = finalR * 0.72f + chorusBufR[rIdxR] * 0.45f
+                        val twoPi = 2f * PI.toFloat()
+                        val d1 = 280f + sin(bbdLfoSlow * twoPi) * 130f + sin(bbdLfoFast * twoPi) * 18f
+                        val d2 = 310f + sin((bbdLfoSlow + 0.333f) * twoPi) * 130f + sin((bbdLfoFast + 0.333f) * twoPi) * 18f
+                        val d3 = 340f + sin((bbdLfoSlow + 0.666f) * twoPi) * 130f + sin((bbdLfoFast + 0.666f) * twoPi) * 18f
+
+                        val r1 = (bbdWritePos - d1.toInt() + bbdBufL.size) % bbdBufL.size
+                        val r2 = (bbdWritePos - d2.toInt() + bbdBufR.size) % bbdBufR.size
+                        val r3 = (bbdWritePos - d3.toInt() + bbdBufL.size) % bbdBufL.size
+
+                        finalL = finalL * 0.68f + (bbdBufL[r1] + bbdBufR[r3] * 0.5f) * 0.38f
+                        finalR = finalR * 0.68f + (bbdBufR[r2] + bbdBufL[r3] * 0.5f) * 0.38f
                     }
-                    chorusWritePos = (chorusWritePos + 1) % chorusBufL.size
+                    bbdWritePos = (bbdWritePos + 1) % bbdBufL.size
 
                     if (fxPump) {
                         val beatPhase = beatSampleCounter.toFloat() / quarterSamples.toFloat()
@@ -938,22 +914,20 @@ class HiChordEngine {
                         finalL = crushedL; finalR = crushedR
                     }
 
-                    // Stereo Ping-Pong Tape Delay
                     val readPos = (delayWritePos - delaySamples + delayBufL.size) % delayBufL.size
                     if (fxDelay) {
                         val dL = delayBufL[readPos]
                         val dR = delayBufR[readPos]
-                        finalL += dR * 0.40f
-                        finalR += dL * 0.40f
-                        delayBufL[delayWritePos] = (finalL * 0.58f).coerceIn(-1f, 1f)
-                        delayBufR[delayWritePos] = (finalR * 0.58f).coerceIn(-1f, 1f)
+                        finalL += dR * 0.38f
+                        finalR += dL * 0.38f
+                        delayBufL[delayWritePos] = (finalL * 0.56f).coerceIn(-1f, 1f)
+                        delayBufR[delayWritePos] = (finalR * 0.56f).coerceIn(-1f, 1f)
                     } else {
                         delayBufL[delayWritePos] = 0f
                         delayBufR[delayWritePos] = 0f
                     }
                     delayWritePos = (delayWritePos + 1) % delayBufL.size
 
-                    // Lush Stereo Schroeder Reverb
                     if (fxReverb && reverbSend > 0.01f) {
                         val revIn = (finalL + finalR) * 0.5f * reverbSend
                         val c1 = comb1[cPos1]; comb1[cPos1] = (revIn + c1 * 0.78f).coerceIn(-1f, 1f); cPos1 = (cPos1 + 1) % comb1.size
@@ -961,8 +935,8 @@ class HiChordEngine {
                         val c3 = comb3[cPos3]; comb3[cPos3] = (revIn + c3 * 0.82f).coerceIn(-1f, 1f); cPos3 = (cPos3 + 1) % comb3.size
                         val c4 = comb4[cPos4]; comb4[cPos4] = (revIn + c4 * 0.84f).coerceIn(-1f, 1f); cPos4 = (cPos4 + 1) % comb4.size
 
-                        val combSumL = (c1 + c3) * 0.34f
-                        val combSumR = (c2 + c4) * 0.34f
+                        val combSumL = (c1 + c3) * 0.32f
+                        val combSumR = (c2 + c4) * 0.32f
 
                         val ap1Buf = allpass1[aPos1]
                         val ap1Out = -combSumL + ap1Buf
@@ -978,8 +952,8 @@ class HiChordEngine {
                         finalR += ap2Out * 0.42f
                     }
 
-                    val outL = tanh(finalL * 1.12f)
-                    val outR = tanh(finalR * 1.12f)
+                    val outL = tanh(finalL * 1.15f)
+                    val outR = tanh(finalR * 1.15f)
                     if (i < scopeBuffer.size) scopeBuffer[i] = (outL + outR) * 0.5f
 
                     stereoBuffer[i * 2] = (outL * 30500f).toInt().toShort()
@@ -991,84 +965,174 @@ class HiChordEngine {
         }
     }
 
-    // 6 ECHTE SYNTHESE-MODELLE PRO STIMME (Beseitigt den Kirchenorgel-Klang komplett)
-    private fun renderVoiceSample(
-        vIdx: Int,
+    private fun stepVoiceEnvelope(
+        v: Int,
+        attackStep: Float,
+        decayMul: Float,
+        releaseMul: Float,
+        targetSustain: Float,
+        fltDecayMul: Float,
+        tineDecayMul: Float
+    ) {
+        when (voiceStage[v]) {
+            1 -> {
+                voiceAmpEnv[v] += attackStep
+                if (voiceAmpEnv[v] >= 1.0f) {
+                    voiceAmpEnv[v] = 1.0f
+                    voiceStage[v] = 2
+                }
+            }
+            2 -> {
+                voiceAmpEnv[v] = targetSustain + (voiceAmpEnv[v] - targetSustain) * decayMul
+                if (abs(voiceAmpEnv[v] - targetSustain) < 0.0006f) {
+                    voiceAmpEnv[v] = targetSustain
+                    voiceStage[v] = if (targetSustain <= 0.001f) 0 else 3
+                }
+            }
+            3 -> {
+                voiceAmpEnv[v] = targetSustain
+                if (!gate) voiceStage[v] = 4
+            }
+            4 -> {
+                voiceAmpEnv[v] *= releaseMul
+                if (voiceAmpEnv[v] < 0.0003f) {
+                    voiceAmpEnv[v] = 0f
+                    voiceStage[v] = 0
+                }
+            }
+        }
+        voiceFltEnv[v] *= fltDecayMul
+        voiceTineEnv[v] *= tineDecayMul
+    }
+
+    // --- DIE 8 CHORD-MACHINE / DAISY-SP SYNTHESE-ALGORITHMEN ---
+    private fun computeChordMachineVoice(
+        v: Int,
         vc: VoiceConfig,
         freq: Float,
         ampEnv: Float,
-        harmEnv: Float,
-        clickEnv: Float,
-        pwmWidth: Float,
-        superSawSpread: FloatArray
+        fltEnv: Float,
+        tineEnv: Float,
+        pwmLfo: Float
     ): Float {
         val dt = (freq / sampleRate).coerceIn(0.0001f, 0.45f)
-        val ratio = fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
-        modPhases[vIdx] = (modPhases[vIdx] + dt * ratio) % 1f
-        val pArr = oscPhases[vIdx]
+        val pArr = oscPhases[v]
         pArr[0] = (pArr[0] + dt) % 1f
         val p0 = pArr[0]
+        val twoPi = 2f * PI.toFloat()
 
-        // Dynamischer FM-Index: Beim Anschlag obertonreich, beim Ausklingen warm und rund!
-        val dynFm = vc.fmDepth * (0.22f + 0.78f * harmEnv)
-        val fmMod = sin(modPhases[vIdx] * 2f * PI.toFloat()) * dynFm
-
-        val rawOsc = when (vc.engine) {
-            0 -> { // ANALOG SAW (Bandlimited PolyBLEP Saw + Sub-Warmth)
-                val p = (p0 + fmMod * 0.35f + 1f) % 1f
-                val saw = (2f * p - 1f) - polyBlep(p, dt)
-                val sub = sin(p0 * 2f * PI.toFloat()) * 0.25f
-                (saw * 0.82f + sub)
-            }
-            1 -> { // PWM PULSE (Modulated Pulse Width -> klingt nach Juno/Solina statt Orgel!)
-                val p = (p0 + fmMod * 0.25f + 1f) % 1f
-                var sq = if (p < pwmWidth) 1f else -1f
-                sq += polyBlep(p, dt)
-                sq -= polyBlep((p + (1f - pwmWidth)) % 1f, dt)
-                sq * 0.82f
-            }
-            2 -> { // PURE TRI/SINE (Warm Triangle-Sine Hybrid + FM Tine)
-                val tri = 1f - 4f * abs(round(p0 - 0.25f) - (p0 - 0.25f))
-                val sine = sin((p0 * 2f * PI.toFloat()) + fmMod * 3.8f)
-                (tri * 0.45f + sine * 0.65f)
-            }
-            3 -> { // 5-SAW CLUSTER (Echter 5-Oszillator Detuned SuperSaw pro Akkordton!)
-                var sum = (2f * p0 - 1f) - polyBlep(p0, dt)
-                for (s in 1..4) {
-                    val sDt = (dt * superSawSpread[s]).coerceIn(0.0001f, 0.45f)
-                    pArr[s] = (pArr[s] + sDt) % 1f
-                    val ps = pArr[s]
-                    sum += (2f * ps - 1f) - polyBlep(ps, sDt)
-                }
-                sum * 0.28f
-            }
-            4 -> { // DX 2-OP FM (Authentisches Rhodes / Vibraphone / E-Piano Modell)
-                val modFeedback = sin(modPhases[vIdx] * 2f * PI.toFloat()) * (0.3f * harmEnv)
-                val modulator = sin((modPhases[vIdx] * 2f * PI.toFloat()) + modFeedback) * dynFm * 6.2f
-                val carrier = sin((p0 * 2f * PI.toFloat()) + modulator)
-                val tineBell = sin(p0 * 6f * PI.toFloat()) * (0.22f * harmEnv * harmEnv)
-                carrier * 0.85f + tineBell
-            }
-            else -> { // PLUCKED STRING / PIANO HAMMER MODEL (Damped Harmonics + String Body)
-                pArr[1] = (pArr[1] + dt * 1.0018f) % 1f
+        val sig = when (vc.engine) {
+            0 -> { // VA_SAW: Dual Detuned PolyBLEP Analog Sawtooth
+                val spread = 1f + vc.morph * 0.0085f
+                val dt2 = (dt * spread).coerceIn(0.0001f, 0.45f)
+                pArr[1] = (pArr[1] + dt2) % 1f
                 val s1 = (2f * p0 - 1f) - polyBlep(p0, dt)
-                val s2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt)
-                val fundamental = sin(p0 * 2f * PI.toFloat())
-                val octaveHarm = sin(p0 * 4f * PI.toFloat()) * 0.45f * harmEnv
-                val fifthHarm = sin(p0 * 6f * PI.toFloat()) * 0.30f * harmEnv * harmEnv
-                // Beim Anschlag klingen die Saiten-Obertöne (s1+s2) hell auf und blenden sanft in den warmen Korpuston über!
-                val stringBite = (s1 + s2) * 0.48f * (0.12f + 0.88f * harmEnv)
-                (fundamental * 0.65f + octaveHarm + fifthHarm + stringBite)
+                val s2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt2)
+                (s1 + s2 * 0.85f) * 0.55f
+            }
+            1 -> { // OCT_SAW: Chord Machine Octave-Saw + Detuned Pair
+                val dtOct = (dt * 2.002f).coerceIn(0.0001f, 0.45f)
+                val dtSub = (dt * 0.994f).coerceIn(0.0001f, 0.45f)
+                pArr[1] = (pArr[1] + dtOct) % 1f
+                pArr[2] = (pArr[2] + dtSub) % 1f
+                val sMain = (2f * p0 - 1f) - polyBlep(p0, dt)
+                val sOct = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dtOct)
+                val sWarm = (2f * pArr[2] - 1f) - polyBlep(pArr[2], dtSub)
+                (sMain * 0.50f + sWarm * 0.45f + sOct * vc.morph * 0.45f) * 0.65f
+            }
+            2 -> { // VA_PWM: Variable Pulse Width + Sub-Triangle
+                val pw = (0.5f + pwmLfo * vc.timbre).coerceIn(0.12f, 0.88f)
+                var pulse = if (p0 < pw) 1f else -1f
+                pulse += polyBlep(p0, dt)
+                pulse -= polyBlep((p0 + 1f - pw) % 1f, dt)
+
+                val dt2 = (dt * 1.0045f).coerceIn(0.0001f, 0.45f)
+                pArr[1] = (pArr[1] + dt2) % 1f
+                val saw2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt2)
+                (pulse * 0.65f + saw2 * vc.morph * 0.45f) * 0.70f
+            }
+            3 -> { // FM1_EP: Rhodes / DX7 E-Piano (1:1 Warm Bark + Separate 1:7/1:14 Tine Bell!)
+                val ratio = fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
+                modPhases[v] = (modPhases[v] + dt * ratio) % 1f
+                tinePhases[v] = (tinePhases[v] + dt * 7.0f) % 1f
+
+                // Bark/Body: Modulations-Index ist nur beim Anschlag hoch und wird sofort warm
+                val bodyIndex = vc.timbre * (0.25f + 1.85f * fltEnv)
+                val bodyMod = sin(modPhases[v] * twoPi) * bodyIndex
+                val bodyCarrier = sin(p0 * twoPi + bodyMod)
+
+                // Rhodes Tine: Inharmonischer Oberton mit kurzem 140ms Tine-Decay
+                val tineBell = sin(tinePhases[v] * twoPi) * tineEnv * vc.morph * 0.55f
+                (bodyCarrier * 0.85f + tineBell)
+            }
+            4 -> { // FM2_MALLET: Inharmonic Vibraphone / Marimba Modal Resonator
+                // Nutzt ungerade/inharmonische Verhältnisse (1 : 3.5 oder 1 : 4) wie echte Metall-/Holz-Klangplatten
+                val ratio = if (vc.fmRatioIndex == 3) 3.5f else 4.0f
+                modPhases[v] = (modPhases[v] + dt * ratio) % 1f
+                tinePhases[v] = (tinePhases[v] + dt * 9.2f) % 1f
+
+                val modIdx = vc.timbre * fltEnv * 3.2f
+                val modSig = sin(modPhases[v] * twoPi) * modIdx
+                val fundamental = sin(p0 * twoPi + modSig)
+                val strikeTransient = sin(tinePhases[v] * twoPi) * tineEnv * tineEnv * 0.45f
+                (fundamental * 0.85f + strikeTransient)
+            }
+            5 -> { // FM3_BELL: Lush Shimmer / Glass FM Pad & Bell
+                val ratio = fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
+                modPhases[v] = (modPhases[v] + dt * ratio) % 1f
+                pArr[1] = (pArr[1] + dt * 1.003f) % 1f
+                val modIdx = vc.timbre * (0.35f + 0.65f * fltEnv) * 2.6f
+                val mod = sin(modPhases[v] * twoPi) * modIdx
+                val c1 = sin(p0 * twoPi + mod)
+                val c2 = sin(pArr[1] * twoPi - mod * 0.7f)
+                (c1 + c2) * 0.55f
+            }
+            6 -> { // KS_STRING: ECHTE KARPLUS-STRONG WAVEGUIDE STRING (Harp, Guitar, Clavinet)
+                stepKarplusStrong(v, freq, stringDamping = 0.25f + vc.morph * 0.70f, pickHardness = vc.timbre)
+            }
+            else -> { // HAMMER_PNO: Multi-String Acoustic Piano (Karplus-Strong + Hammer-Thump + Unison-String)
+                val ksMain = stepKarplusStrong(v, freq, stringDamping = 0.65f + vc.morph * 0.30f, pickHardness = vc.timbre)
+                // Zweite minimal verstimmte Klaviersaite (Bicord/Tricord Schwebung)
+                val dt2 = (dt * 1.0009f).coerceIn(0.0001f, 0.45f)
+                pArr[1] = (pArr[1] + dt2) % 1f
+                val soundboard = sin(p0 * twoPi + sin(pArr[1] * twoPi) * 0.6f * fltEnv) * 0.40f
+                val hammerThump = sin(p0 * twoPi * 0.5f) * tineEnv * tineEnv * 0.35f
+                (ksMain * 0.78f + soundboard + hammerThump)
             }
         }
 
-        // Physikalischer Hammer-/Plektrum-Transient im ersten Moment des Anschlags (für Piano, Gitarre, Harp & Mallet)
-        val hammerNoise = if (clickEnv > 0.01f) {
-            val clickTone = sin(p0 * 14f * PI.toFloat()) * 0.6f + (Random.nextFloat() * 2f - 1f) * 0.4f
-            clickTone * clickEnv * 0.45f
-        } else 0f
+        return sig * 0.24f * vc.level * ampEnv
+    }
 
-        return (rawOsc + hammerNoise) * 0.22f * vc.level * ampEnv
+    // Echter physikalischer Karplus-Strong Saiten-Algorithmus mit linearer Phasen-Interpolation
+    private fun stepKarplusStrong(v: Int, freq: Float, stringDamping: Float, pickHardness: Float): Float {
+        val line = ksDelayLines[v]
+        val wPos = ksWritePos[v]
+
+        val exactPeriod = (sampleRate / freq.coerceAtLeast(35f)).coerceIn(16f, (line.size - 4).toFloat())
+        val intPeriod = exactPeriod.toInt()
+        val frac = exactPeriod - intPeriod
+
+        val rPos1 = (wPos - intPeriod + line.size) % line.size
+        val rPos2 = (rPos1 - 1 + line.size) % line.size
+        val delayedSample = line[rPos1] * (1f - frac) + line[rPos2] * frac
+
+        // One-Pole Tiefpass in der Rückkopplungsschleife: Hohe Frequenzen verklingen schneller als tiefe (wie bei einer echten Saite!)
+        val lpCoeff = (0.35f + pickHardness * 0.58f).coerceIn(0.25f, 0.94f)
+        ksLpState[v] += lpCoeff * (delayedSample - ksLpState[v])
+
+        var excite = 0f
+        if (ksExciteRemaining[v] > 0) {
+            ksExciteRemaining[v]--
+            excite = (Random.nextFloat() * 2f - 1f) * pickHardness * 0.35f
+        }
+
+        val fb = (0.986f + stringDamping * 0.0125f).coerceIn(0.982f, 0.9988f)
+        val newSample = (ksLpState[v] * fb + excite).coerceIn(-1.5f, 1.5f)
+        line[wPos] = newSample
+        ksWritePos[v] = (wPos + 1) % line.size
+
+        return newSample * 1.25f
     }
 
     @Synchronized
@@ -1078,15 +1142,13 @@ class HiChordEngine {
     }
 }
 
-// --- MUSIKTHEORIE: DUR (MAJOR) & NATÜRLICHES MOLL (MINOR) + 8-WEGE JOYSTICK ---
+// --- MUSIKTHEORIE: WOLFPUNK CHORD MACHINE INVERSIONS + MAJOR/MINOR + 8-WAY JOYSTICK ---
 val rootNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
-// Dur (Major): I, ii, iii, IV, V, vi, vii°
 val majorScaleOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
-val majorDefaultQuality = intArrayOf(0, 1, 1, 0, 0, 1, 2) // 0: Maj, 1: Min, 2: Dim
+val majorDefaultQuality = intArrayOf(0, 1, 1, 0, 0, 1, 2)
 val majorRomanDegrees = listOf("I", "ii", "iii", "IV", "V", "vi", "vii°")
 
-// Natürliches Moll (Natural Minor): i, ii°, III, iv, v, VI, VII
 val minorScaleOffsets = intArrayOf(0, 2, 3, 5, 7, 8, 10)
 val minorDefaultQuality = intArrayOf(1, 2, 0, 1, 1, 0, 0)
 val minorRomanDegrees = listOf("i", "ii°", "III", "iv", "v", "VI", "VII")
@@ -1099,13 +1161,14 @@ data class ChordVoicingResult(
     val bassFreq: Float
 )
 
-fun buildHiChordVoicing(
+// inversionMode: 0 = AUTO V-LEAD, 1 = ROOT (Inv 0), 2 = 1ST INV (Inv 1), 3 = 2ND INV (Inv 2)
+fun buildWolfChordVoicing(
     keyIndex: Int,
     isMinorScale: Boolean,
     degree: Int,
     octaveShift: Int,
     joyZone: JoyChordZone,
-    voiceLeadingOn: Boolean,
+    inversionMode: Int,
     bassMode: Int
 ): ChordVoicingResult {
     val offsets = if (isMinorScale) minorScaleOffsets else majorScaleOffsets
@@ -1115,7 +1178,7 @@ fun buildHiChordVoicing(
     val rootMidiBase = 60 + rootSemitone + (octaveShift * 12)
     val noteName = rootNames[rootSemitone % 12]
 
-    var qual = qualities[degree] // 0 = Maj, 1 = Min, 2 = Dim
+    var qual = qualities[degree]
     var third = if (qual == 0) 4 else 3
     var fifth = if (qual == 2) 6 else 7
     var fourthNote = 12
@@ -1127,37 +1190,37 @@ fun buildHiChordVoicing(
 
     when (joyZone) {
         JoyChordZone.CENTER -> {}
-        JoyChordZone.UP -> { // FLIP Maj <-> Min
+        JoyChordZone.UP -> {
             qual = if (qual == 0) 1 else 0
             third = if (qual == 0) 4 else 3
             fifth = 7
             chordLabelSuffix = if (qual == 1) "m" else "MAJ"
         }
-        JoyChordZone.UP_RIGHT -> { // Dom 7th
+        JoyChordZone.UP_RIGHT -> {
             third = 4; fifth = 7; fourthNote = 10
             chordLabelSuffix = "7"
         }
-        JoyChordZone.RIGHT -> { // Maj7 / m7
+        JoyChordZone.RIGHT -> {
             fourthNote = if (qual == 0) 11 else 10
             chordLabelSuffix = if (qual == 0) "maj7" else "m7"
         }
-        JoyChordZone.DOWN_RIGHT -> { // Add9 / 9th
+        JoyChordZone.DOWN_RIGHT -> {
             fourthNote = 14
             chordLabelSuffix = if (qual == 1) "m9" else "add9"
         }
-        JoyChordZone.DOWN -> { // Sus4
+        JoyChordZone.DOWN -> {
             third = 5; fifth = 7
             chordLabelSuffix = "sus4"
         }
-        JoyChordZone.DOWN_LEFT -> { // 6th
+        JoyChordZone.DOWN_LEFT -> {
             fourthNote = 9
             chordLabelSuffix = if (qual == 1) "m6" else "6"
         }
-        JoyChordZone.LEFT -> { // Dim7
+        JoyChordZone.LEFT -> {
             third = 3; fifth = 6; fourthNote = 9
             chordLabelSuffix = "dim7"
         }
-        JoyChordZone.UP_LEFT -> { // Aug
+        JoyChordZone.UP_LEFT -> {
             third = 4; fifth = 8
             chordLabelSuffix = "aug"
         }
@@ -1170,13 +1233,25 @@ fun buildHiChordVoicing(
         rootMidiBase + fourthNote
     )
 
-    if (voiceLeadingOn) {
-        val centerTarget = 64 + (octaveShift * 12)
-        for (i in 0..3) {
-            while (midiNotes[i] - centerTarget > 6) midiNotes[i] -= 12
-            while (centerTarget - midiNotes[i] > 6) midiNotes[i] += 12
+    // Wolfpunk Chord Machine Inversion & Voice-Leading Engine
+    when (inversionMode) {
+        0 -> { // AUTO VOICE-LEADING (Hält alle Noten eng um C4..G4 zusammen)
+            val centerTarget = 64 + (octaveShift * 12)
+            for (i in 0..3) {
+                while (midiNotes[i] - centerTarget > 6) midiNotes[i] -= 12
+                while (centerTarget - midiNotes[i] > 6) midiNotes[i] += 12
+            }
+            midiNotes.sort()
         }
-        midiNotes.sort()
+        2 -> { // 1ST INVERSION (Grundton eine Oktave hoch)
+            midiNotes[0] += 12
+            midiNotes.sort()
+        }
+        3 -> { // 2ND INVERSION (Grundton + Terz eine Oktave hoch)
+            midiNotes[0] += 12
+            midiNotes[1] += 12
+            midiNotes.sort()
+        }
     }
 
     var slashSuffix = ""
@@ -1198,26 +1273,26 @@ fun buildHiChordVoicing(
 }
 
 @Composable
-fun TeHiChordApp(synth: HiChordEngine) {
+fun TeHiChordApp(synth: WolfChordEngine) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("hichord_presets", Context.MODE_PRIVATE) }
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     var keyIndex by remember { mutableStateOf(0) }
-    var isMinorScale by remember { mutableStateOf(false) } // Eigener Major/Minor Umschalter!
+    var isMinorScale by remember { mutableStateOf(false) }
     var bpm by remember { mutableStateOf(120) }
     var activeDegree by remember { mutableStateOf(-1) }
     var displayChord by remember { mutableStateOf("HI-CHORD") }
 
-    var voiceLeadingOn by remember { mutableStateOf(true) }
+    var inversionMode by remember { mutableStateOf(0) } // 0: V-LEAD, 1: INV 0, 2: INV 1, 3: INV 2
     var bassMode by remember { mutableStateOf(1) }
     var octaveShift by remember { mutableStateOf(0) }
     var holdLatch by remember { mutableStateOf(false) }
     var strumMode by remember { mutableStateOf(false) }
-    var filterWheel by remember { mutableStateOf(0.46f) }
+    var filterWheel by remember { mutableStateOf(0.62f) }
 
-    var waveIndex by remember { mutableStateOf(4) }
+    var waveIndex by remember { mutableStateOf(3) }
     var adsrMode by remember { mutableStateOf(3) }
     var arpMode by remember { mutableStateOf(0) }
     var activeSlot by remember { mutableStateOf(0) }
@@ -1225,20 +1300,19 @@ fun TeHiChordApp(synth: HiChordEngine) {
 
     val userPresets = remember {
         val list = mutableStateListOf<SynthPreset>()
-        val rawSet = prefs.getStringSet("user_presets_v5", emptySet()) ?: emptySet()
+        val rawSet = prefs.getStringSet("user_presets_v6", emptySet()) ?: emptySet()
         rawSet.mapNotNull { SynthPreset.deserialize(it) }
             .sortedBy { it.name }
             .forEach { list.add(it) }
         list
     }
 
-    // 4 Schnellwahl-Slots mit den 4 beliebtesten originalen HiChord-Presets vorbelegt
     val slotPresets = remember {
         mutableStateListOf(
             factoryPresets[0],  // FM E-PIANO
-            factoryPresets[2],  // WARM PAD
-            factoryPresets[8],  // DELICATE HARP
-            factoryPresets[5]   // SUPERSAW
+            factoryPresets[2],  // DELICATE HARP (Karplus-Strong)
+            factoryPresets[4],  // WARM PAD
+            factoryPresets[7]   // OCTAVE SAW
         )
     }
 
@@ -1253,18 +1327,17 @@ fun TeHiChordApp(synth: HiChordEngine) {
 
     fun saveUserPresetsToDisk() {
         val serialized = userPresets.map { it.serialize() }.toSet()
-        prefs.edit().putStringSet("user_presets_v5", serialized).apply()
+        prefs.edit().putStringSet("user_presets_v6", serialized).apply()
     }
 
     var joyX by remember { mutableStateOf(0f) }
     var joyY by remember { mutableStateOf(0f) }
     val activeJoyZone = getJoystickZone(joyX, joyY)
 
-    // Synchrone Echtzeit-Funktion für Akkord-Ansteuerung (Beseitigt den "Tasten reagieren manchmal nicht"-Bug!)
     fun syncChordState(deg: Int, retriggerAttack: Boolean) {
         activeDegree = deg
         if (deg in 0..6) {
-            val res = buildHiChordVoicing(keyIndex, isMinorScale, deg, octaveShift, activeJoyZone, voiceLeadingOn, bassMode)
+            val res = buildWolfChordVoicing(keyIndex, isMinorScale, deg, octaveShift, activeJoyZone, inversionMode, bassMode)
             displayChord = res.displayName
             synth.playChord(res.voiceFreqs, res.bassFreq, retriggerAttack)
         } else {
@@ -1272,10 +1345,9 @@ fun TeHiChordApp(synth: HiChordEngine) {
         }
     }
 
-    // Wenn während eines gehaltenen Akkords der Joystick, die Tonart oder Major/Minor geändert wird -> Voicing sofort live aktualisieren!
-    LaunchedEffect(keyIndex, isMinorScale, octaveShift, activeJoyZone, voiceLeadingOn, bassMode) {
+    LaunchedEffect(keyIndex, isMinorScale, octaveShift, activeJoyZone, inversionMode, bassMode) {
         if (activeDegree in 0..6) {
-            val res = buildHiChordVoicing(keyIndex, isMinorScale, activeDegree, octaveShift, activeJoyZone, voiceLeadingOn, bassMode)
+            val res = buildWolfChordVoicing(keyIndex, isMinorScale, activeDegree, octaveShift, activeJoyZone, inversionMode, bassMode)
             displayChord = res.displayName
             synth.playChord(res.voiceFreqs, res.bassFreq, retriggerAttack = false)
         }
@@ -1376,8 +1448,8 @@ fun TeHiChordApp(synth: HiChordEngine) {
                 waveIndex = p.voices[0].engine
                 uiRefreshCounter++
             },
-            voiceLeadingOn = voiceLeadingOn,
-            onToggleVoiceLeading = { voiceLeadingOn = !voiceLeadingOn },
+            inversionMode = inversionMode,
+            onCycleInversion = { inversionMode = (inversionMode + 1) % 4 },
             bassMode = bassMode,
             onCycleBassMode = {
                 bassMode = (bassMode + 1) % 3
@@ -1419,10 +1491,10 @@ fun TeHiChordApp(synth: HiChordEngine) {
     }
 }
 
-// --- 90° QUERFORMAT: EXPERT 4-VOICE LAB & HICHORD PRESET BROWSER ---
+// --- 90° QUERFORMAT: EXPERT 4-VOICE LAB & PRESET BROWSER ---
 @Composable
 fun TeExpertLandscapeScreen(
-    synth: HiChordEngine,
+    synth: WolfChordEngine,
     keyIndex: Int,
     isMinorScale: Boolean,
     activeDegree: Int,
@@ -1481,7 +1553,7 @@ fun TeExpertLandscapeScreen(
                 ) {
                     Column {
                         Text(
-                            text = if (showBrowser) "HICHORD PRESETS" else "EXPERT // 4-VOICE LAB",
+                            text = if (showBrowser) "HICHORD PRESETS" else "CHORD MACHINE LAB",
                             color = TeOrange,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold,
@@ -1530,7 +1602,7 @@ fun TeExpertLandscapeScreen(
 
             TeTactileButton(
                 title = if (showBrowser) "VOICE LAB" else "PRESETS",
-                sub = "16 HICHORD",
+                sub = "16 INSTRUMENTS",
                 modifier = Modifier.weight(0.78f),
                 height = 44.dp,
                 bgColor = if (showBrowser) TeBlue else TeOchre,
@@ -1578,7 +1650,7 @@ fun TeExpertLandscapeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "SELECT HICHORD INSTRUMENT FOR SLOT 0${activeSlot + 1} (KEYS, PADS, STRINGS, PLUCKS, MALLETS)",
+                        text = "LOAD INSTRUMENT INTO SLOT 0${activeSlot + 1} (KARPLUS-STRONG STRINGS, DX-FM, BBD ENSEMBLE, ANALOG)",
                         color = Color(0xFF00E5FF),
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -1734,34 +1806,8 @@ fun TeExpertLandscapeScreen(
                                 }
                             }
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(text = "FM RATIO", color = Color(0xFF00E5FF), fontSize = 8.sp, fontFamily = FontFamily.Monospace)
-                            Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                                for (rIdx in fmRatios.indices) {
-                                    val rVal = fmRatios[rIdx]
-                                    val rText = if (rVal == 0.5f) ".5" else "${rVal.toInt()}x"
-                                    val selected = vc.fmRatioIndex == rIdx
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(3.dp))
-                                            .background(if (selected) Color(0xFF00E5FF) else Color(0xFF2D2D2B))
-                                            .clickable {
-                                                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                                vc.fmRatioIndex = rIdx
-                                                onParamChanged()
-                                            }
-                                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(text = rText, color = if (selected) TePanelDark else Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                                    }
-                                }
-                            }
-                        }
-                        TeBarSlider(label = "HARMONICS / FM", valueText = "${(vc.fmDepth * 100).roundToInt()}%", fraction = vc.fmDepth, barColor = Color(0xFF00E5FF), onValueChange = { vc.fmDepth = it; onParamChanged() })
+                        TeBarSlider(label = "TIMBRE / BRIGHT", valueText = "${(vc.timbre * 100).roundToInt()}%", fraction = vc.timbre, barColor = Color(0xFF00E5FF), onValueChange = { vc.timbre = it; onParamChanged() })
+                        TeBarSlider(label = "MORPH / DAMPING", valueText = "${(vc.morph * 100).roundToInt()}%", fraction = vc.morph, barColor = TeBlue, onValueChange = { vc.morph = it; onParamChanged() })
                         TeBarSlider(label = "DETUNE", valueText = "${if (vc.detuneCents >= 0) "+${vc.detuneCents}" else vc.detuneCents}ct", fraction = (vc.detuneCents + 50f) / 100f, barColor = TeOchre, onValueChange = { vc.detuneCents = ((it * 100f) - 50f).roundToInt(); onParamChanged() })
                         val panInt = (vc.pan * 100).roundToInt()
                         val panLabel = when { panInt < -5 -> "L${-panInt}"; panInt > 5 -> "R$panInt"; else -> "CTR" }
@@ -1772,7 +1818,7 @@ fun TeExpertLandscapeScreen(
             }
         }
 
-        // 3. BOTTOM AUDITION STRIP (100% ZUVERLÄSSIGER TRIGGER)
+        // 3. BOTTOM AUDITION STRIP
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1886,7 +1932,7 @@ fun TeBarSlider(label: String, valueText: String, fraction: Float, barColor: Col
             Text(text = valueText, color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         }
         Box(
-            modifier = Modifier.fillMaxWidth().height(16.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF2A2A28))
+            modifier = Modifier.fillMaxWidth().height(15.dp).clip(RoundedCornerShape(4.dp)).background(Color(0xFF2A2A28))
                 .onSizeChanged { boxWidth = it.width.coerceAtLeast(1) }
                 .pointerInput(Unit) {
                     awaitEachGesture {
@@ -1905,10 +1951,10 @@ fun TeBarSlider(label: String, valueText: String, fraction: Float, barColor: Col
     }
 }
 
-// --- HOCHFORMAT: HICHORD COMPANION INTERFACE ---
+// --- HOCHFORMAT: WOLFPUNK / HICHORD COMPANION INTERFACE ---
 @Composable
 fun TePortraitJamScreen(
-    synth: HiChordEngine,
+    synth: WolfChordEngine,
     keyIndex: Int,
     onKeyChange: (Int) -> Unit,
     isMinorScale: Boolean,
@@ -1921,8 +1967,8 @@ fun TePortraitJamScreen(
     activePresetName: String,
     activePresetCategory: String,
     onCycleSlot: () -> Unit,
-    voiceLeadingOn: Boolean,
-    onToggleVoiceLeading: () -> Unit,
+    inversionMode: Int,
+    onCycleInversion: () -> Unit,
     bassMode: Int,
     onCycleBassMode: () -> Unit,
     octaveShift: Int,
@@ -1962,6 +2008,7 @@ fun TePortraitJamScreen(
     var lastZone by remember { mutableStateOf(JoyChordZone.CENTER) }
 
     val arpNames = listOf("ARP", "UP", "DOWN", "U/D", "RAND")
+    val invLabels = listOf("V-LEAD", "INV: 0", "INV: 1", "INV: 2")
     val bassLabels = listOf("BASS:OFF", "BASS:ROOT", "BASS:SLSH")
     val romanDegrees = if (isMinorScale) minorRomanDegrees else majorRomanDegrees
     val scaleOffsets = if (isMinorScale) minorScaleOffsets else majorScaleOffsets
@@ -1988,7 +2035,7 @@ fun TePortraitJamScreen(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ScrewHead()
                 Text(
-                    text = "HICHORD // POCKET SYNTH (ROTATE 90° FOR LAB)",
+                    text = "HICHORD // CHORD MACHINE (ROTATE 90° FOR LAB)",
                     color = TePanelDark,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Black,
@@ -2037,7 +2084,7 @@ fun TePortraitJamScreen(
             }
         }
 
-        // 2. OLED DISPLAY & ORIGINAL HICHORD 8-WEGE CHORD JOYSTICK
+        // 2. OLED DISPLAY & 8-WEGE CHORD JOYSTICK
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2082,7 +2129,7 @@ fun TePortraitJamScreen(
                             Text(
                                 text = when {
                                     activeJoyZone != JoyChordZone.CENTER -> "JOYSTICK // ${activeJoyZone.desc}"
-                                    activeDegree >= 0 -> "$activePresetCategory · ${if (isMinorScale) "MINOR SCALE" else "MAJOR SCALE"}"
+                                    activeDegree >= 0 -> "$activePresetCategory · ${if (isMinorScale) "MINOR" else "MAJOR"} · ${invLabels[inversionMode]}"
                                     else -> "TAP PRESET OR ROTATE 90° FOR LAB"
                                 },
                                 color = if (activeJoyZone != JoyChordZone.CENTER) Color(0xFF00E5FF) else Color(0xFF888884),
@@ -2099,8 +2146,8 @@ fun TePortraitJamScreen(
                             )
                         }
                         Text(
-                            text = if (voiceLeadingOn) "V-LEAD" else "ROOT POS",
-                            color = if (voiceLeadingOn) TeOchre else Color(0xFF777772),
+                            text = invLabels[inversionMode],
+                            color = TeOchre,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
@@ -2206,7 +2253,7 @@ fun TePortraitJamScreen(
         }
 
         // 3. SYSTEM, TONART, 1-BPM TEMPO, TAP-SYNC, WAVE, ADSR & ARP
-        SectionDivider("SYSTEM // KEY, 1-BPM TEMPO, TAP-SYNC, WAVE, ADSR & ARP")
+        SectionDivider("SYSTEM // KEY, 1-BPM TEMPO, TAP-SYNC, ENGINE, ADSR & ARP")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             TeTactileButton(title = "KEY -", sub = "ROOT", modifier = Modifier.weight(0.95f), height = 42.dp, bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onKeyChange((keyIndex + 11) % 12) })
             TeTactileButton(title = "KEY +", sub = "ROOT", modifier = Modifier.weight(0.95f), height = 42.dp, bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onKeyChange((keyIndex + 1) % 12) })
@@ -2233,21 +2280,20 @@ fun TePortraitJamScreen(
             TeTactileButton(title = arpNames[arpMode], sub = "ARP", modifier = Modifier.weight(0.95f), height = 42.dp, bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = arpMode > 0, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onArpChange((arpMode + 1) % arpNames.size) })
         }
 
-        // 4. PERFORMANCE FX + REVERB & SIDECHAIN PUMP
-        SectionDivider("PERFORMANCE FX // MOMENTARY FX + STEREO CHORUS, REVERB & PUMP")
+        // 4. PERFORMANCE FX + BBD ENSEMBLE, REVERB & SIDECHAIN PUMP
+        SectionDivider("PERFORMANCE FX // MOMENTARY FX + BBD ENSEMBLE, REVERB & PUMP")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             TeMomentaryFxButton(title = "DELAY", sub = "ECHO", isPressed = fxDelay, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxDelay = true; synth.fxDelay = true }, onRelease = { fxDelay = false; synth.fxDelay = false })
             TeMomentaryFxButton(title = "CRUSH", sub = "8-BIT", isPressed = fxCrush, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxCrush = true; synth.fxCrush = true }, onRelease = { fxCrush = false; synth.fxCrush = false })
             TeMomentaryFxButton(title = "STUTTR", sub = "1/32", isPressed = fxStutter, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxStutter = true; synth.fxStutter = true }, onRelease = { fxStutter = false; synth.fxStutter = false })
-            TeTactileButton(title = "CHORUS", sub = "JUNO", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxChorus) TeOrange else TeBlue, shadowColor = if (fxChorus) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxChorus, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxChorus = !fxChorus; synth.fxChorus = fxChorus })
+            TeTactileButton(title = "ENSEMB", sub = "3-BBD", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxChorus) TeOrange else TeBlue, shadowColor = if (fxChorus) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxChorus, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxChorus = !fxChorus; synth.fxChorus = fxChorus })
             TeTactileButton(title = "REVERB", sub = "HALL", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxReverb) TeOrange else TeKeyDark, shadowColor = if (fxReverb) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = fxReverb, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxReverb = !fxReverb; synth.fxReverb = fxReverb })
             TeTactileButton(title = "PUMP", sub = "DUCK", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxPump) TeOrange else TeBlue, shadowColor = if (fxPump) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxPump, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxPump = !fxPump; synth.fxPump = fxPump })
         }
 
-        // 5. HICHORD PLAY MODES + DEDIZIERTER MAJOR / MINOR BUTTON!
-        SectionDivider("HICHORD MODES // DEDICATED MAJOR/MINOR, HOLD, STRUM, V-LEAD & BASS")
+        // 5. WOLFPUNK CHORD MACHINE MODES (DEDICATED MAJOR/MINOR, INVERSION, HOLD, STRUM, BASS, OCT)
+        SectionDivider("CHORD MACHINE CONTROLS // MAJOR/MINOR, INV 0-2, HOLD, STRUM & BASS")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            // Eigener Knopf zum Umschalten zwischen Dur (Major) und Moll (Minor)!
             TeTactileButton(
                 title = if (isMinorScale) "MINOR" else "MAJOR",
                 sub = "SCALE",
@@ -2262,9 +2308,9 @@ fun TePortraitJamScreen(
                     onToggleMajorMinor()
                 }
             )
-            TeTactileButton(title = "HOLD", sub = "DRONE", modifier = Modifier.weight(0.9f), height = 46.dp, bgColor = if (holdLatch) TeBlue else TeKeyDark, shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = holdLatch, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleHold() })
-            TeTactileButton(title = "STRUM", sub = "CHORD", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (strumMode) TeOrange else TeKeyDark, shadowColor = if (strumMode) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = strumMode, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleStrum() })
-            TeTactileButton(title = "V-LEAD", sub = "SMOOTH", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (voiceLeadingOn) TeOrange else TeKeyDark, shadowColor = if (voiceLeadingOn) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = voiceLeadingOn, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleVoiceLeading() })
+            TeTactileButton(title = "HOLD", sub = "LATCH", modifier = Modifier.weight(0.9f), height = 46.dp, bgColor = if (holdLatch) TeBlue else TeKeyDark, shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = holdLatch, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleHold() })
+            TeTactileButton(title = "STRUM", sub = "PLUCK", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (strumMode) TeOrange else TeKeyDark, shadowColor = if (strumMode) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = strumMode, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleStrum() })
+            TeTactileButton(title = invLabels[inversionMode], sub = "VOICING", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (inversionMode > 0) TeOrange else TeKeyDark, shadowColor = if (inversionMode > 0) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = true, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onCycleInversion() })
             TeTactileButton(title = bassLabels[bassMode], sub = "SUB-OSC", modifier = Modifier.weight(1.05f), height = 46.dp, bgColor = if (bassMode > 0) TeKeyDark else Color(0xFF3A3A38), shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = bassMode > 0, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onCycleBassMode() })
             TeTactileButton(
                 title = "OCT ${if (octaveShift >= 0) "+$octaveShift" else octaveShift}",
@@ -2282,8 +2328,8 @@ fun TePortraitJamScreen(
             )
         }
 
-        // 6. 7 NASHVILLE DIATONIC CHORD BUTTONS (100% REAKTIONS-SICHERER TOUCH-HANDLER)
-        SectionDivider("NASHVILLE CHORD BUTTONS // 100% INSTANT RESPONSE (I - VII)")
+        // 6. 7 DIATONIC CHORD BUTTONS (I - VII)
+        SectionDivider("DIATONIC CHORD KEYS // INSTANT TRIGGER & LEGATO SLIDE (I - VII)")
         var padGridSize by remember { mutableStateOf(IntSize.Zero) }
 
         Column(
@@ -2295,7 +2341,6 @@ fun TePortraitJamScreen(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         down.consume()
 
-                        // Klemmt die Koordinaten immer sicher in das gültige 7-Tasten-Raster (kein "toter Rand" mehr!)
                         fun mapOffsetToDegree(pos: Offset): Int {
                             val w = padGridSize.width.coerceAtLeast(1)
                             val h = padGridSize.height.coerceAtLeast(1)
