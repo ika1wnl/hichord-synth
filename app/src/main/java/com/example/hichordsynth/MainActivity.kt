@@ -49,11 +49,11 @@ import kotlin.concurrent.thread
 import kotlin.math.*
 import kotlin.random.Random
 
-// --- TEENAGE ENGINEERING / HICHORD FARBPALETTE ---
+// --- TEENAGE ENGINEERING / HICHORD FIELD PALETTE ---
 val TeChassis = Color(0xFFD8D6D0)
-val TePanelDark = Color(0xFF171717)
-val TeKeyDark = Color(0xFF282828)
-val TeKeyDarkShadow = Color(0xFF101010)
+val TePanelDark = Color(0xFF151515)
+val TeKeyDark = Color(0xFF262626)
+val TeKeyDarkShadow = Color(0xFF0E0E0E)
 val TeKeyLight = Color(0xFFF4F3EF)
 val TeKeyLightShadow = Color(0xFFA6A49E)
 val TeOrange = Color(0xFFFF4F00)
@@ -65,7 +65,7 @@ val TeLedRed = Color(0xFFFF2A2A)
 val TeLedOff = Color(0xFF4A4946)
 
 class MainActivity : ComponentActivity() {
-    private val synth = WolfChordEngine()
+    private val synth = HiChordProEngine()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,24 +92,21 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- CHORD MACHINE / DAISY-SP SYNTHESE-ALGORITHMEN ---
-// 0: VA_SAW      (Bandlimited PolyBLEP Saw + Analog Drift)
-// 1: OCT_SAW     (Chord Machine Octave-Saw + Sub-Saw Stack)
-// 2: VA_PWM      (Variable Pulse Width Modulation + Ensemble)
-// 3: FM1_EP      (DX Rhodes Electric Piano: 1:1 + 1:14 Tine Transient)
-// 4: FM2_MALLET  (Inharmonic 1:3.5 / 1:4 Vibraphone & Marimba Resonator)
-// 5: FM3_BELL    (Metallic Shimmer / Warm Glass Bell)
-// 6: KS_STRING   (Echte Karplus-Strong Delay-Line Waveguide für Harp, Guitar & Clav)
-// 7: HAMMER_PNO  (Multi-String Piano Model mit Hammer-Filz-Filter & Soundboard)
-val engineNames = listOf("SAW", "OSAW", "PWM", "FM1", "FM2", "FM3", "STRG", "PNO")
-val fmRatios = floatArrayOf(0.5f, 1.0f, 2.0f, 3.5f, 4.0f, 7.0f, 14.0f)
-val adsrNames = listOf("SUST", "SWEL", "PLCK", "KEYS")
+// --- STUDIO ENGINE MODELLE ---
+// 0: CLEAN POLY  (Neutral Warm Saw + Triangle Foundation - Default)
+// 1: JUNO PWM    (Modulated Pulse + Saw + Sub - Lush Pads & Cloudrap)
+// 2: HYPERSAW    (7-Oscillator Stereo Detuned SuperSaw - Rage & Trap Leads)
+// 3: DX TINE EP  (2-Op Phase Modulated Rhodes/FM - Lo-Fi & Neo-Soul Keys)
+// 4: MODAL BELL  (Inharmonic Glass/Metal Resonator - Dark Trap Bells & Plucks)
+// 5: KARPLUS STR (Physical Waveguide Plucked String - Harp, Guitar & Plucks)
+val engineNames = listOf("POLY", "JUNO", "HYPR", "DXEP", "BELL", "STRG")
+val fmRatios = floatArrayOf(0.5f, 1.0f, 2.0f, 3.0f, 4.0f, 7.0f)
+val adsrNames = listOf("SUST", "PAD", "PLCK", "KEYS")
 
 class VoiceConfig(
-    @Volatile var engine: Int = 3,
+    @Volatile var engine: Int = 0,
     @Volatile var fmRatioIndex: Int = 1,
-    @Volatile var timbre: Float = 0.42f,   // Steuert FM-Index, String-Brightness oder PWM
-    @Volatile var morph: Float = 0.35f,    // Steuert Decay-Damping, Detune-Spread oder Tine-Pegel
+    @Volatile var timbre: Float = 0.25f,
     @Volatile var detuneCents: Int = 0,
     @Volatile var octShift: Int = 0,
     @Volatile var pan: Float = 0f,
@@ -120,7 +117,6 @@ data class VoicePresetData(
     val engine: Int,
     val fmRatioIndex: Int,
     val timbre: Float,
-    val morph: Float,
     val detuneCents: Int,
     val octShift: Int,
     val pan: Float,
@@ -131,46 +127,46 @@ data class SynthPreset(
     val id: String,
     val name: String,
     val category: String,
-    val adsrMode: Int,          // 0: SUST, 1: SWEL, 2: PLCK, 3: KEYS
+    val adsrMode: Int,          // 0: SUST, 1: PAD, 2: PLCK, 3: KEYS
     val attackMs: Float,
     val decayMs: Float,
     val sustainLevel: Float,
     val releaseMs: Float,
-    val baseCutoff: Float,
-    val filterResonance: Float,
-    val filterEnvAmount: Float,
-    val vibratoDepth: Float,
-    val tremoloDepth: Float,    // Stereo Auto-Pan / Tremolo (für E-Piano & Vibraphone)
+    val baseCutoff: Float,      // 0.0..1.0 (Logarithmic 80Hz..16kHz)
+    val filterResonance: Float, // 0.0..0.85
+    val filterEnvAmount: Float, // 0.0..1.0
+    val unisonSpread: Float,    // 0.0..1.0
+    val lofiAmount: Float,      // 0.0..1.0 (Wow/Flutter, Tape Warmth, Vintage Drift)
     val glideSpeed: Float,
-    val reverbSend: Float,
-    val ensembleOn: Boolean,
+    val reverbMix: Float,
+    val chorusOn: Boolean,
     val delayOn: Boolean,
+    val lofiOn: Boolean,
     val voices: List<VoicePresetData>,
     val isUser: Boolean = false
 ) {
     fun serialize(): String {
         val vStr = voices.joinToString(";") {
-            "${it.engine},${it.fmRatioIndex},${it.timbre},${it.morph},${it.detuneCents},${it.octShift},${it.pan},${it.level}"
+            "${it.engine},${it.fmRatioIndex},${it.timbre},${it.detuneCents},${it.octShift},${it.pan},${it.level}"
         }
-        return "$id|$name|$category|$adsrMode|$attackMs|$decayMs|$sustainLevel|$releaseMs|$baseCutoff|$filterResonance|$filterEnvAmount|$vibratoDepth|$tremoloDepth|$glideSpeed|$reverbSend|$ensembleOn|$delayOn|$vStr"
+        return "$id|$name|$category|$adsrMode|$attackMs|$decayMs|$sustainLevel|$releaseMs|$baseCutoff|$filterResonance|$filterEnvAmount|$unisonSpread|$lofiAmount|$glideSpeed|$reverbMix|$chorusOn|$delayOn|$lofiOn|$vStr"
     }
 
     companion object {
         fun deserialize(raw: String): SynthPreset? {
             return try {
                 val p = raw.split("|")
-                if (p.size < 18) return null
-                val vList = p[17].split(";").map { vRaw ->
+                if (p.size < 19) return null
+                val vList = p[18].split(";").map { vRaw ->
                     val vp = vRaw.split(",")
                     VoicePresetData(
                         engine = vp[0].toInt(),
                         fmRatioIndex = vp[1].toInt(),
                         timbre = vp[2].toFloat(),
-                        morph = vp[3].toFloat(),
-                        detuneCents = vp[4].toInt(),
-                        octShift = vp[5].toInt(),
-                        pan = vp[6].toFloat(),
-                        level = vp[7].toFloat()
+                        detuneCents = vp[3].toInt(),
+                        octShift = vp[4].toInt(),
+                        pan = vp[5].toFloat(),
+                        level = vp[6].toFloat()
                     )
                 }
                 if (vList.size != 4) return null
@@ -179,10 +175,11 @@ data class SynthPreset(
                     adsrMode = p[3].toInt(), attackMs = p[4].toFloat(), decayMs = p[5].toFloat(),
                     sustainLevel = p[6].toFloat(), releaseMs = p[7].toFloat(),
                     baseCutoff = p[8].toFloat(), filterResonance = p[9].toFloat(),
-                    filterEnvAmount = p[10].toFloat(), vibratoDepth = p[11].toFloat(),
-                    tremoloDepth = p[12].toFloat(), glideSpeed = p[13].toFloat(),
-                    reverbSend = p[14].toFloat(), ensembleOn = p[15].toBoolean(),
-                    delayOn = p[16].toBoolean(), voices = vList, isUser = true
+                    filterEnvAmount = p[10].toFloat(), unisonSpread = p[11].toFloat(),
+                    lofiAmount = p[12].toFloat(), glideSpeed = p[13].toFloat(),
+                    reverbMix = p[14].toFloat(), chorusOn = p[15].toBoolean(),
+                    delayOn = p[16].toBoolean(), lofiOn = p[17].toBoolean(),
+                    voices = vList, isUser = true
                 )
             } catch (_: Exception) {
                 null
@@ -191,235 +188,179 @@ data class SynthPreset(
     }
 }
 
-// --- DIE 16 ORIGINALEN HICHORD & CHORD-MACHINE INSTRUMENTE ---
+// --- 12 KURATIERTE STUDIO-PRESETS (INKL. EHRLICHEM "INIT NEUTRAL" DEFAULT) ---
 val factoryPresets = listOf(
-    // 01. FM E-PIANO (Rhodes Mk1 + Stereo Auto-Pan Tremolo)
+    // 01. INIT NEUTRAL (Ehrlicher, ausgewogener Default-Polysynth ohne Effekt-Matsch)
     SynthPreset(
-        id = "cm_01_epiano", name = "FM E-PIANO", category = "KEYS",
-        adsrMode = 3, attackMs = 2f, decayMs = 1500f, sustainLevel = 0.12f, releaseMs = 420f,
-        baseCutoff = 0.62f, filterResonance = 0.18f, filterEnvAmount = 0.35f,
-        vibratoDepth = 0.0010f, tremoloDepth = 0.45f, glideSpeed = 0.045f, reverbSend = 0.32f,
-        ensembleOn = false, delayOn = false,
+        id = "p_01_init", name = "INIT NEUTRAL", category = "DEFAULT",
+        adsrMode = 0, attackMs = 8f, decayMs = 600f, sustainLevel = 0.78f, releaseMs = 280f,
+        baseCutoff = 0.65f, filterResonance = 0.15f, filterEnvAmount = 0.25f,
+        unisonSpread = 0.20f, lofiAmount = 0.0f, glideSpeed = 0.025f, reverbMix = 0.18f,
+        chorusOn = false, delayOn = false, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.42f, morph = 0.35f, detuneCents = -2, octShift = 0, pan = -0.35f, level = 0.95f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.45f, morph = 0.40f, detuneCents = 3, octShift = 0, pan = 0.35f, level = 0.90f),
-            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.38f, morph = 0.30f, detuneCents = -4, octShift = 0, pan = -0.60f, level = 0.85f),
-            VoicePresetData(engine = 3, fmRatioIndex = 5, timbre = 0.30f, morph = 0.48f, detuneCents = 5, octShift = 0, pan = 0.60f, level = 0.78f)
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.25f, detuneCents = -3, octShift = 0, pan = -0.30f, level = 0.90f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.25f, detuneCents = 3, octShift = 0, pan = 0.30f, level = 0.90f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.25f, detuneCents = -6, octShift = 0, pan = -0.55f, level = 0.85f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.25f, detuneCents = 6, octShift = 0, pan = 0.55f, level = 0.85f)
         )
     ),
-    // 02. GRAND PIANO (Echte Karplus-Strong Hammer-Saiten-Resonanz)
+    // 02. HICHORD KEYS (Warmes Rhodes Mk1 Tine E-Piano)
     SynthPreset(
-        id = "cm_02_piano", name = "GRAND PIANO", category = "KEYS",
-        adsrMode = 2, attackMs = 1.5f, decayMs = 1450f, sustainLevel = 0.0f, releaseMs = 320f,
-        baseCutoff = 0.72f, filterResonance = 0.15f, filterEnvAmount = 0.45f,
-        vibratoDepth = 0.0f, tremoloDepth = 0.0f, glideSpeed = 0.090f, reverbSend = 0.30f,
-        ensembleOn = false, delayOn = false,
+        id = "p_02_keys", name = "HICHORD KEYS", category = "HICHORD OG",
+        adsrMode = 3, attackMs = 2.5f, decayMs = 1650f, sustainLevel = 0.12f, releaseMs = 420f,
+        baseCutoff = 0.58f, filterResonance = 0.12f, filterEnvAmount = 0.35f,
+        unisonSpread = 0.25f, lofiAmount = 0.22f, glideSpeed = 0.045f, reverbMix = 0.32f,
+        chorusOn = true, delayOn = false, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 7, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = -2, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 7, fmRatioIndex = 1, timbre = 0.65f, morph = 0.72f, detuneCents = 2, octShift = 0, pan = 0.30f, level = 0.92f),
-            VoicePresetData(engine = 7, fmRatioIndex = 2, timbre = 0.60f, morph = 0.68f, detuneCents = -3, octShift = 0, pan = -0.60f, level = 0.88f),
-            VoicePresetData(engine = 7, fmRatioIndex = 2, timbre = 0.58f, morph = 0.65f, detuneCents = 3, octShift = 0, pan = 0.60f, level = 0.84f)
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.38f, detuneCents = -2, octShift = 0, pan = -0.35f, level = 0.95f),
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.38f, detuneCents = 2, octShift = 0, pan = 0.35f, level = 0.90f),
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.35f, detuneCents = -4, octShift = 0, pan = -0.60f, level = 0.85f),
+            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.30f, detuneCents = 4, octShift = 0, pan = 0.60f, level = 0.78f)
         )
     ),
-    // 03. DELICATE HARP (Echte Karplus-Strong Zupfsaiten!)
+    // 03. JUNO-60 PAD (Klassisches HiChord Analog-PWM-Pad mit BBD Chorus)
     SynthPreset(
-        id = "cm_03_harp", name = "DELICATE HARP", category = "PLUCK",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 1300f, sustainLevel = 0.0f, releaseMs = 450f,
-        baseCutoff = 0.78f, filterResonance = 0.12f, filterEnvAmount = 0.35f,
-        vibratoDepth = 0.0006f, tremoloDepth = 0.0f, glideSpeed = 0.080f, reverbSend = 0.52f,
-        ensembleOn = false, delayOn = true,
+        id = "p_03_juno", name = "JUNO-60 PAD", category = "HICHORD OG",
+        adsrMode = 1, attackMs = 380f, decayMs = 1200f, sustainLevel = 0.85f, releaseMs = 950f,
+        baseCutoff = 0.42f, filterResonance = 0.32f, filterEnvAmount = 0.38f,
+        unisonSpread = 0.55f, lofiAmount = 0.18f, glideSpeed = 0.0045f, reverbMix = 0.52f,
+        chorusOn = true, delayOn = false, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.55f, morph = 0.82f, detuneCents = 0, octShift = 0, pan = -0.35f, level = 0.95f),
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.58f, morph = 0.80f, detuneCents = -3, octShift = 0, pan = 0.35f, level = 0.92f),
-            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.62f, morph = 0.78f, detuneCents = 3, octShift = 0, pan = -0.70f, level = 0.88f),
-            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.65f, morph = 0.75f, detuneCents = 5, octShift = 1, pan = 0.70f, level = 0.76f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.52f, detuneCents = -7, octShift = 0, pan = -0.50f, level = 0.92f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.52f, detuneCents = 7, octShift = 0, pan = 0.50f, level = 0.92f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.48f, detuneCents = -14, octShift = 0, pan = -0.80f, level = 0.86f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.48f, detuneCents = 14, octShift = 0, pan = 0.80f, level = 0.86f)
         )
     ),
-    // 04. ACOUSTIC GUITAR (Karplus-Strong Steel-String Guitar)
+    // 04. TAPE LO-FI KEYS (Verträumtes Vintage-Cassette-Piano mit aktiviertem Lo-Fi-Modus)
     SynthPreset(
-        id = "cm_04_guitar", name = "STEEL GUITAR", category = "PLUCK",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 1150f, sustainLevel = 0.0f, releaseMs = 300f,
-        baseCutoff = 0.68f, filterResonance = 0.25f, filterEnvAmount = 0.48f,
-        vibratoDepth = 0.0012f, tremoloDepth = 0.0f, glideSpeed = 0.025f, reverbSend = 0.36f,
-        ensembleOn = true, delayOn = false,
+        id = "p_04_lofikeys", name = "TAPE LO-FI KEYS", category = "LO-FI VINTAGE",
+        adsrMode = 3, attackMs = 4f, decayMs = 1150f, sustainLevel = 0.15f, releaseMs = 380f,
+        baseCutoff = 0.40f, filterResonance = 0.24f, filterEnvAmount = 0.42f,
+        unisonSpread = 0.35f, lofiAmount = 0.72f, glideSpeed = 0.020f, reverbMix = 0.44f,
+        chorusOn = true, delayOn = false, lofiOn = true,
         voices = listOf(
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.82f, morph = 0.68f, detuneCents = -2, octShift = -1, pan = -0.25f, level = 0.95f),
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.78f, morph = 0.70f, detuneCents = 2, octShift = 0, pan = 0.25f, level = 0.90f),
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.85f, morph = 0.66f, detuneCents = -4, octShift = 0, pan = -0.65f, level = 0.88f),
-            VoicePresetData(engine = 6, fmRatioIndex = 2, timbre = 0.80f, morph = 0.64f, detuneCents = 4, octShift = 0, pan = 0.65f, level = 0.85f)
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.32f, detuneCents = -6, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.28f, detuneCents = 6, octShift = 0, pan = 0.30f, level = 0.88f),
+            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.30f, detuneCents = -12, octShift = 0, pan = -0.60f, level = 0.84f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.25f, detuneCents = 12, octShift = 0, pan = 0.60f, level = 0.80f)
         )
     ),
-    // 05. WARM PAD (Juno-60 Analog PWM + Sub-Saw Pad mit Per-Voice Filter-Sweep)
+    // 05. CLOUD CATHEDRAL (Yung Lean / Whitearmor Lush Shimmer Pad)
     SynthPreset(
-        id = "cm_05_warmpad", name = "WARM PAD", category = "SYNTH PAD",
-        adsrMode = 1, attackMs = 450f, decayMs = 1100f, sustainLevel = 0.85f, releaseMs = 950f,
-        baseCutoff = 0.26f, filterResonance = 0.38f, filterEnvAmount = 0.42f,
-        vibratoDepth = 0.0022f, tremoloDepth = 0.0f, glideSpeed = 0.0035f, reverbSend = 0.56f,
-        ensembleOn = true, delayOn = false,
+        id = "p_05_cloud", name = "CLOUD CATHEDRAL", category = "CLOUDRAP",
+        adsrMode = 1, attackMs = 520f, decayMs = 1500f, sustainLevel = 0.88f, releaseMs = 1250f,
+        baseCutoff = 0.52f, filterResonance = 0.28f, filterEnvAmount = 0.30f,
+        unisonSpread = 0.75f, lofiAmount = 0.35f, glideSpeed = 0.0028f, reverbMix = 0.72f,
+        chorusOn = true, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.55f, morph = 0.50f, detuneCents = -8, octShift = 0, pan = -0.55f, level = 0.90f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.45f, morph = 0.40f, detuneCents = 8, octShift = 0, pan = 0.55f, level = 0.90f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.50f, morph = 0.60f, detuneCents = -15, octShift = 0, pan = -0.85f, level = 0.84f),
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.60f, morph = 0.50f, detuneCents = 15, octShift = 0, pan = 0.85f, level = 0.84f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.45f, detuneCents = -8, octShift = 0, pan = -0.45f, level = 0.92f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.55f, detuneCents = 8, octShift = 0, pan = 0.45f, level = 0.88f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.60f, detuneCents = -16, octShift = 0, pan = -0.85f, level = 0.85f),
+            VoicePresetData(engine = 4, fmRatioIndex = 2, timbre = 0.35f, detuneCents = 16, octShift = 1, pan = 0.85f, level = 0.68f)
         )
     ),
-    // 06. STRINGS (Solina 3-Phase BBD Ensemble String Machine)
+    // 06. OPIUM RAGE SAW (Ken Carson / Playboi Carti 7-Osc Hypersaw Lead Stack)
     SynthPreset(
-        id = "cm_06_strings", name = "STRINGS", category = "ENSEMBLE",
-        adsrMode = 1, attackMs = 540f, decayMs = 900f, sustainLevel = 0.92f, releaseMs = 920f,
-        baseCutoff = 0.52f, filterResonance = 0.25f, filterEnvAmount = 0.22f,
-        vibratoDepth = 0.0030f, tremoloDepth = 0.12f, glideSpeed = 0.0045f, reverbSend = 0.58f,
-        ensembleOn = true, delayOn = false,
+        id = "p_06_rage", name = "OPIUM RAGE SAW", category = "RAGE / TRAP",
+        adsrMode = 0, attackMs = 3f, decayMs = 450f, sustainLevel = 0.92f, releaseMs = 220f,
+        baseCutoff = 0.86f, filterResonance = 0.30f, filterEnvAmount = 0.35f,
+        unisonSpread = 0.92f, lofiAmount = 0.0f, glideSpeed = 0.0085f, reverbMix = 0.28f,
+        chorusOn = false, delayOn = false, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.62f, morph = 0.55f, detuneCents = -11, octShift = 0, pan = -0.75f, level = 0.88f),
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.68f, morph = 0.60f, detuneCents = 11, octShift = 0, pan = 0.75f, level = 0.88f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.55f, morph = 0.45f, detuneCents = -18, octShift = 0, pan = -0.45f, level = 0.82f),
-            VoicePresetData(engine = 1, fmRatioIndex = 2, timbre = 0.50f, morph = 0.50f, detuneCents = 18, octShift = 0, pan = 0.45f, level = 0.78f)
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.85f, detuneCents = -10, octShift = -1, pan = 0f, level = 0.95f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.90f, detuneCents = -22, octShift = 0, pan = -0.90f, level = 0.92f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.90f, detuneCents = 22, octShift = 0, pan = 0.90f, level = 0.92f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.85f, detuneCents = 12, octShift = 1, pan = 0f, level = 0.78f)
         )
     ),
-    // 07. SAW SYNTH (Prophet-5 Polyphonic Analog Saw)
+    // 07. LUCID PLUCK (Juice WRLD / Nick Mira Melodic Trap Pluck)
     SynthPreset(
-        id = "cm_07_sawsynth", name = "SAW SYNTH", category = "ANALOG",
-        adsrMode = 0, attackMs = 6f, decayMs = 480f, sustainLevel = 0.72f, releaseMs = 320f,
-        baseCutoff = 0.38f, filterResonance = 0.45f, filterEnvAmount = 0.58f,
-        vibratoDepth = 0.0015f, tremoloDepth = 0.0f, glideSpeed = 0.0065f, reverbSend = 0.32f,
-        ensembleOn = true, delayOn = false,
+        id = "p_07_lucid", name = "LUCID PLUCK", category = "EMO / TRAP",
+        adsrMode = 2, attackMs = 1.5f, decayMs = 580f, sustainLevel = 0.0f, releaseMs = 320f,
+        baseCutoff = 0.34f, filterResonance = 0.42f, filterEnvAmount = 0.78f,
+        unisonSpread = 0.48f, lofiAmount = 0.25f, glideSpeed = 0.015f, reverbMix = 0.46f,
+        chorusOn = true, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = -7, octShift = 0, pan = -0.45f, level = 0.92f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = 7, octShift = 0, pan = 0.45f, level = 0.92f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.60f, morph = 0.42f, detuneCents = -14, octShift = 0, pan = -0.80f, level = 0.86f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.60f, morph = 0.42f, detuneCents = 14, octShift = 0, pan = 0.80f, level = 0.86f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.55f, detuneCents = -5, octShift = 0, pan = -0.35f, level = 0.95f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.50f, detuneCents = 5, octShift = 0, pan = 0.35f, level = 0.90f),
+            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.42f, detuneCents = -10, octShift = 0, pan = -0.70f, level = 0.85f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.48f, detuneCents = 10, octShift = 0, pan = 0.70f, level = 0.85f)
         )
     ),
-    // 08. OCTAVE SAW (Chord Machine Signature Octave-Saw Stack)
+    // 08. METRO DARK BELL (Dunkle, glockige Trap-Pluck-Textur)
     SynthPreset(
-        id = "cm_08_octsaw", name = "OCTAVE SAW", category = "ANALOG",
-        adsrMode = 0, attackMs = 5f, decayMs = 520f, sustainLevel = 0.82f, releaseMs = 360f,
-        baseCutoff = 0.54f, filterResonance = 0.38f, filterEnvAmount = 0.48f,
-        vibratoDepth = 0.0012f, tremoloDepth = 0.0f, glideSpeed = 0.0055f, reverbSend = 0.40f,
-        ensembleOn = true, delayOn = false,
+        id = "p_08_metrobell", name = "METRO DARK BELL", category = "TRAP",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 750f, sustainLevel = 0.0f, releaseMs = 420f,
+        baseCutoff = 0.48f, filterResonance = 0.25f, filterEnvAmount = 0.62f,
+        unisonSpread = 0.30f, lofiAmount = 0.30f, glideSpeed = 0.030f, reverbMix = 0.54f,
+        chorusOn = false, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.72f, morph = 0.65f, detuneCents = -10, octShift = 0, pan = -0.55f, level = 0.92f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.72f, morph = 0.65f, detuneCents = 10, octShift = 0, pan = 0.55f, level = 0.92f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = -22, octShift = 0, pan = -0.90f, level = 0.88f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.68f, morph = 0.75f, detuneCents = 22, octShift = 0, pan = 0.90f, level = 0.88f)
+            VoicePresetData(engine = 4, fmRatioIndex = 2, timbre = 0.52f, detuneCents = -3, octShift = 0, pan = -0.30f, level = 0.95f),
+            VoicePresetData(engine = 4, fmRatioIndex = 2, timbre = 0.52f, detuneCents = 3, octShift = 0, pan = 0.30f, level = 0.92f),
+            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.46f, detuneCents = -7, octShift = 0, pan = -0.65f, level = 0.84f),
+            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.46f, detuneCents = 7, octShift = 0, pan = 0.65f, level = 0.84f)
         )
     ),
-    // 09. SYNTH BRASS (OB-Xa / CS-80 Analog Filter-Sweep Brass)
+    // 09. TAPE MELLOTRON (Vintage Lo-Fi Flute/String Choir)
     SynthPreset(
-        id = "cm_09_brass", name = "SYNTH BRASS", category = "ANALOG",
-        adsrMode = 0, attackMs = 42f, decayMs = 480f, sustainLevel = 0.76f, releaseMs = 300f,
-        baseCutoff = 0.18f, filterResonance = 0.52f, filterEnvAmount = 0.76f,
-        vibratoDepth = 0.0020f, tremoloDepth = 0.0f, glideSpeed = 0.0032f, reverbSend = 0.36f,
-        ensembleOn = false, delayOn = false,
+        id = "p_09_mellotron", name = "TAPE MELLOTRON", category = "LO-FI VINTAGE",
+        adsrMode = 1, attackMs = 260f, decayMs = 900f, sustainLevel = 0.80f, releaseMs = 580f,
+        baseCutoff = 0.32f, filterResonance = 0.38f, filterEnvAmount = 0.25f,
+        unisonSpread = 0.42f, lofiAmount = 0.82f, glideSpeed = 0.0050f, reverbMix = 0.45f,
+        chorusOn = true, delayOn = false, lofiOn = true,
         voices = listOf(
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.80f, morph = 0.30f, detuneCents = -9, octShift = 0, pan = -0.50f, level = 0.94f),
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, morph = 0.35f, detuneCents = 9, octShift = 0, pan = 0.50f, level = 0.90f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.75f, morph = 0.45f, detuneCents = -18, octShift = 0, pan = -0.85f, level = 0.88f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.80f, morph = 0.30f, detuneCents = 18, octShift = 0, pan = 0.85f, level = 0.88f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.62f, detuneCents = -8, octShift = 0, pan = -0.40f, level = 0.92f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.45f, detuneCents = 8, octShift = 0, pan = 0.40f, level = 0.90f),
+            VoicePresetData(engine = 1, fmRatioIndex = 2, timbre = 0.55f, detuneCents = -15, octShift = 0, pan = -0.75f, level = 0.84f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.40f, detuneCents = 15, octShift = 0, pan = 0.75f, level = 0.82f)
         )
     ),
-    // 10. VIBRAPHONE (Inharmonic 1:3.5 / 1:4 Modal Mallet + Motor Tremolo)
+    // 10. PROPHET BRASS (Mike Dean / Astroworld Analog Filter-Sweep Brass)
     SynthPreset(
-        id = "cm_10_vibraphone", name = "VIBRAPHONE", category = "MALLET",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 1250f, sustainLevel = 0.0f, releaseMs = 520f,
-        baseCutoff = 0.68f, filterResonance = 0.15f, filterEnvAmount = 0.38f,
-        vibratoDepth = 0.0015f, tremoloDepth = 0.55f, glideSpeed = 0.070f, reverbSend = 0.48f,
-        ensembleOn = false, delayOn = false,
+        id = "p_10_brass", name = "PROPHET BRASS", category = "ANALOG",
+        adsrMode = 0, attackMs = 45f, decayMs = 580f, sustainLevel = 0.76f, releaseMs = 360f,
+        baseCutoff = 0.22f, filterResonance = 0.48f, filterEnvAmount = 0.78f,
+        unisonSpread = 0.62f, lofiAmount = 0.25f, glideSpeed = 0.0022f, reverbMix = 0.42f,
+        chorusOn = true, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.45f, morph = 0.65f, detuneCents = 0, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.48f, morph = 0.60f, detuneCents = -3, octShift = 0, pan = 0.30f, level = 0.90f),
-            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.40f, morph = 0.55f, detuneCents = 3, octShift = 0, pan = -0.60f, level = 0.85f),
-            VoicePresetData(engine = 4, fmRatioIndex = 5, timbre = 0.35f, morph = 0.50f, detuneCents = 5, octShift = 0, pan = 0.60f, level = 0.78f)
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.75f, detuneCents = -6, octShift = -1, pan = 0f, level = 0.95f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, detuneCents = -12, octShift = 0, pan = -0.70f, level = 0.90f),
+            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, detuneCents = 12, octShift = 0, pan = 0.70f, level = 0.90f),
+            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.70f, detuneCents = 18, octShift = 0, pan = 0f, level = 0.85f)
         )
     ),
-    // 11. MARIMBA (Wooden Hollow Resonator Mallet)
+    // 11. ACOUSTIC HARP (Echte Karplus-Strong Zupfsaiten)
     SynthPreset(
-        id = "cm_11_marimba", name = "MARIMBA", category = "MALLET",
-        adsrMode = 2, attackMs = 1.0f, decayMs = 360f, sustainLevel = 0.0f, releaseMs = 200f,
-        baseCutoff = 0.46f, filterResonance = 0.32f, filterEnvAmount = 0.64f,
-        vibratoDepth = 0.0f, tremoloDepth = 0.0f, glideSpeed = 0.085f, reverbSend = 0.34f,
-        ensembleOn = false, delayOn = true,
+        id = "p_11_harp", name = "ACOUSTIC HARP", category = "HICHORD OG",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 1250f, sustainLevel = 0.0f, releaseMs = 480f,
+        baseCutoff = 0.76f, filterResonance = 0.14f, filterEnvAmount = 0.38f,
+        unisonSpread = 0.22f, lofiAmount = 0.10f, glideSpeed = 0.070f, reverbMix = 0.52f,
+        chorusOn = false, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.62f, morph = 0.25f, detuneCents = 0, octShift = 0, pan = -0.25f, level = 0.95f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.58f, morph = 0.22f, detuneCents = -3, octShift = 0, pan = 0.25f, level = 0.90f),
-            VoicePresetData(engine = 4, fmRatioIndex = 3, timbre = 0.52f, morph = 0.20f, detuneCents = 3, octShift = 0, pan = -0.55f, level = 0.86f),
-            VoicePresetData(engine = 4, fmRatioIndex = 4, timbre = 0.55f, morph = 0.24f, detuneCents = 5, octShift = 0, pan = 0.55f, level = 0.82f)
+            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.68f, detuneCents = -2, octShift = 0, pan = -0.35f, level = 0.95f),
+            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.68f, detuneCents = 2, octShift = 0, pan = 0.35f, level = 0.92f),
+            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.72f, detuneCents = -4, octShift = 0, pan = -0.65f, level = 0.88f),
+            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.75f, detuneCents = 4, octShift = 1, pan = 0.65f, level = 0.75f)
         )
     ),
-    // 12. FUNK CLAVINET (Crisp Karplus-Strong Funk Clav)
+    // 12. POCKET CHIP (Clean Chiptune Pulse Synth)
     SynthPreset(
-        id = "cm_12_clavinet", name = "FUNK CLAVINET", category = "KEYS",
-        adsrMode = 2, attackMs = 1.0f, decayMs = 620f, sustainLevel = 0.0f, releaseMs = 180f,
-        baseCutoff = 0.64f, filterResonance = 0.46f, filterEnvAmount = 0.68f,
-        vibratoDepth = 0.0005f, tremoloDepth = 0.0f, glideSpeed = 0.080f, reverbSend = 0.24f,
-        ensembleOn = false, delayOn = false,
+        id = "p_12_chip", name = "POCKET CHIP", category = "HICHORD OG",
+        adsrMode = 2, attackMs = 1.2f, decayMs = 420f, sustainLevel = 0.0f, releaseMs = 180f,
+        baseCutoff = 0.84f, filterResonance = 0.20f, filterEnvAmount = 0.35f,
+        unisonSpread = 0.15f, lofiAmount = 0.0f, glideSpeed = 0.090f, reverbMix = 0.22f,
+        chorusOn = false, delayOn = true, lofiOn = false,
         voices = listOf(
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.92f, morph = 0.52f, detuneCents = -2, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.90f, morph = 0.50f, detuneCents = 2, octShift = 0, pan = 0.30f, level = 0.92f),
-            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.82f, morph = 0.45f, detuneCents = -4, octShift = 0, pan = -0.60f, level = 0.84f),
-            VoicePresetData(engine = 6, fmRatioIndex = 1, timbre = 0.88f, morph = 0.48f, detuneCents = 4, octShift = 0, pan = 0.60f, level = 0.84f)
-        )
-    ),
-    // 13. WURLI REEDS (Warm Reed E-Piano + Tremolo)
-    SynthPreset(
-        id = "cm_13_wurli", name = "WURLI REEDS", category = "KEYS",
-        adsrMode = 3, attackMs = 2f, decayMs = 1050f, sustainLevel = 0.16f, releaseMs = 340f,
-        baseCutoff = 0.42f, filterResonance = 0.30f, filterEnvAmount = 0.52f,
-        vibratoDepth = 0.0012f, tremoloDepth = 0.52f, glideSpeed = 0.040f, reverbSend = 0.30f,
-        ensembleOn = false, delayOn = false,
-        voices = listOf(
-            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.64f, morph = 0.22f, detuneCents = -3, octShift = 0, pan = -0.30f, level = 0.95f),
-            VoicePresetData(engine = 3, fmRatioIndex = 1, timbre = 0.60f, morph = 0.25f, detuneCents = 3, octShift = 0, pan = 0.30f, level = 0.90f),
-            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.48f, morph = 0.20f, detuneCents = -6, octShift = 0, pan = -0.60f, level = 0.84f),
-            VoicePresetData(engine = 3, fmRatioIndex = 3, timbre = 0.52f, morph = 0.18f, detuneCents = 6, octShift = 0, pan = 0.60f, level = 0.78f)
-        )
-    ),
-    // 14. CRYSTAL BELLS (Chord Machine FM3 Ambient Shimmer Bells)
-    SynthPreset(
-        id = "cm_14_bells", name = "CRYSTAL BELLS", category = "MALLET",
-        adsrMode = 2, attackMs = 1.5f, decayMs = 1350f, sustainLevel = 0.0f, releaseMs = 680f,
-        baseCutoff = 0.74f, filterResonance = 0.22f, filterEnvAmount = 0.40f,
-        vibratoDepth = 0.0025f, tremoloDepth = 0.25f, glideSpeed = 0.030f, reverbSend = 0.62f,
-        ensembleOn = true, delayOn = true,
-        voices = listOf(
-            VoicePresetData(engine = 5, fmRatioIndex = 3, timbre = 0.52f, morph = 0.60f, detuneCents = -5, octShift = 0, pan = -0.45f, level = 0.92f),
-            VoicePresetData(engine = 5, fmRatioIndex = 5, timbre = 0.48f, morph = 0.65f, detuneCents = 5, octShift = 0, pan = 0.45f, level = 0.90f),
-            VoicePresetData(engine = 5, fmRatioIndex = 6, timbre = 0.42f, morph = 0.70f, detuneCents = -11, octShift = 0, pan = -0.80f, level = 0.82f),
-            VoicePresetData(engine = 3, fmRatioIndex = 2, timbre = 0.35f, morph = 0.55f, detuneCents = 11, octShift = 1, pan = 0.80f, level = 0.72f)
-        )
-    ),
-    // 15.TAPE MELLOTRON (Vintage Lo-Fi Flute/String Tape Choir)
-    SynthPreset(
-        id = "cm_15_mellotron", name = "TAPE MELLOTRON", category = "ENSEMBLE",
-        adsrMode = 1, attackMs = 280f, decayMs = 800f, sustainLevel = 0.82f, releaseMs = 620f,
-        baseCutoff = 0.30f, filterResonance = 0.42f, filterEnvAmount = 0.28f,
-        vibratoDepth = 0.0052f, tremoloDepth = 0.18f, glideSpeed = 0.0040f, reverbSend = 0.46f,
-        ensembleOn = true, delayOn = true,
-        voices = listOf(
-            VoicePresetData(engine = 2, fmRatioIndex = 2, timbre = 0.42f, morph = 0.65f, detuneCents = -9, octShift = 0, pan = -0.50f, level = 0.90f),
-            VoicePresetData(engine = 5, fmRatioIndex = 1, timbre = 0.32f, morph = 0.50f, detuneCents = 9, octShift = 0, pan = 0.50f, level = 0.88f),
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.38f, morph = 0.60f, detuneCents = -16, octShift = 0, pan = -0.80f, level = 0.82f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.30f, morph = 0.40f, detuneCents = 16, octShift = 0, pan = 0.80f, level = 0.80f)
-        )
-    ),
-    // 16. ANALOG PLUCK (Short Resonant Per-Voice Filter Pluck)
-    SynthPreset(
-        id = "cm_16_analogpluck", name = "ANALOG PLUCK", category = "PLUCK",
-        adsrMode = 2, attackMs = 1.2f, decayMs = 420f, sustainLevel = 0.0f, releaseMs = 220f,
-        baseCutoff = 0.16f, filterResonance = 0.58f, filterEnvAmount = 0.82f,
-        vibratoDepth = 0.0010f, tremoloDepth = 0.0f, glideSpeed = 0.012f, reverbSend = 0.38f,
-        ensembleOn = true, delayOn = true,
-        voices = listOf(
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.70f, morph = 0.50f, detuneCents = -6, octShift = 0, pan = -0.40f, level = 0.95f),
-            VoicePresetData(engine = 2, fmRatioIndex = 1, timbre = 0.65f, morph = 0.45f, detuneCents = 6, octShift = 0, pan = 0.40f, level = 0.92f),
-            VoicePresetData(engine = 0, fmRatioIndex = 1, timbre = 0.75f, morph = 0.40f, detuneCents = -12, octShift = 0, pan = -0.75f, level = 0.88f),
-            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.70f, morph = 0.55f, detuneCents = 12, octShift = 0, pan = 0.75f, level = 0.88f)
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.85f, detuneCents = 0, octShift = 0, pan = -0.35f, level = 0.92f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.85f, detuneCents = -4, octShift = 0, pan = 0.35f, level = 0.88f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.85f, detuneCents = 4, octShift = 0, pan = -0.65f, level = 0.85f),
+            VoicePresetData(engine = 1, fmRatioIndex = 1, timbre = 0.85f, detuneCents = 0, octShift = 1, pan = 0.65f, level = 0.74f)
         )
     )
 )
 
-// --- 8-WEGE JOYSTICK-RICHTUNGEN ---
+// --- 8-WEGE HICHORD JOYSTICK-RICHTUNGEN ---
 enum class JoyChordZone(val shortLabel: String, val desc: String) {
     CENTER("NORM", "DIATONIC"),
     UP("FLIP", "MAJ ↔ MIN"),
@@ -463,9 +404,9 @@ fun polyBlep(t: Float, dt: Float): Float {
     }
 }
 
-// --- WOLFPUNK / DAISY-SP CHORD MACHINE AUDIO ENGINE ---
-class WolfChordEngine {
-    private val sampleRate = 44100
+// --- HICHORD PRO 32-BIT FLOAT DSP ENGINE (CYTOMIC ZDF FILTER + DATTORRO REVERB + LO-FI TAPE DECK) ---
+class HiChordProEngine {
+    private val sampleRate = 48000
     @Volatile var isRunning = false
     private var audioThread: Thread? = null
 
@@ -479,66 +420,67 @@ class WolfChordEngine {
     @Volatile var bpm = 120
     @Volatile var strumMode = false
     @Volatile var bassMode = 1
-    @Volatile var filterWheel = 0.58f
+    @Volatile var filterWheel = 0.65f
 
-    @Volatile var adsrMode = 3
-    @Volatile var attackMs = 2f
-    @Volatile var decayMs = 1400f
-    @Volatile var sustainLevel = 0.12f
-    @Volatile var releaseMs = 420f
-    @Volatile var baseCutoff = 0.62f
-    @Volatile var filterResonance = 0.22f
-    @Volatile var filterEnvAmount = 0.45f
-    @Volatile var vibratoDepth = 0.0012f
-    @Volatile var tremoloDepth = 0.35f
-    @Volatile var glideSpeed = 0.040f
-    @Volatile var reverbSend = 0.35f
+    // Cohesive Synth Studio Parameters
+    @Volatile var adsrMode = 0
+    @Volatile var attackMs = 8f
+    @Volatile var decayMs = 600f
+    @Volatile var sustainLevel = 0.78f
+    @Volatile var releaseMs = 280f
+    @Volatile var baseCutoff = 0.65f
+    @Volatile var filterResonance = 0.15f
+    @Volatile var filterEnvAmount = 0.25f
+    @Volatile var unisonSpread = 0.20f
+    @Volatile var lofiAmount = 0.45f
+    @Volatile var glideSpeed = 0.025f
+    @Volatile var reverbMix = 0.22f
 
     @Volatile var arpMode = 0
 
-    // Performance FX
+    // Performance & Vintage Modes
     @Volatile var fxDelay = false
     @Volatile var fxCrush = false
     @Volatile var fxStutter = false
     @Volatile var fxChorus = false
     @Volatile var fxPump = false
     @Volatile var fxReverb = true
+    @Volatile var lofiMode = false // Dedizierter Lo-Fi Vintage Tape Modus!
 
     @Volatile private var syncResetRequested = false
     @Volatile private var attackTriggerCount = 0
 
     val voices = Array(4) { v ->
         VoiceConfig(
-            engine = 3,
+            engine = 0,
             fmRatioIndex = 1,
-            timbre = 0.42f,
-            morph = 0.35f,
-            detuneCents = when (v) { 0 -> -2; 1 -> 3; 2 -> -4; else -> 5 },
+            timbre = 0.25f,
+            detuneCents = when (v) { 0 -> -3; 1 -> 3; 2 -> -6; else -> 6 },
             octShift = 0,
-            pan = when (v) { 0 -> -0.35f; 1 -> 0.35f; 2 -> -0.60f; else -> 0.60f },
+            pan = when (v) { 0 -> -0.30f; 1 -> 0.30f; 2 -> -0.55f; else -> 0.55f },
             level = 0.88f
         )
     }
 
     val scopeBuffer = FloatArray(128)
 
-    // Oszillator-Phasen & Analog-Drift pro Stimme
-    private val oscPhases = Array(4) { FloatArray(4) { Random.nextFloat() } }
+    // 7 Sub-Oszillatoren pro Stimme für echten Stereo-Hypersaw
+    private val oscPhases = Array(4) { FloatArray(7) { Random.nextFloat() } }
     private val modPhases = FloatArray(4) { Random.nextFloat() }
     private val tinePhases = FloatArray(4) { Random.nextFloat() }
-    private val voiceDrift = FloatArray(4) { 1f }
+    private val analogDrift = FloatArray(4) { 1f }
 
-    // ECHTE KARPLUS-STRONG WAVEGUIDE DELAY-LINE PRO STIMME (2048 Samples)
+    // Karplus-Strong Delay-Line pro Stimme
     private val ksDelayLines = Array(4) { FloatArray(2048) }
     private val ksWritePos = IntArray(4)
     private val ksLpState = FloatArray(4)
     private val ksExciteRemaining = IntArray(4)
 
-    // EIGENES 2-POL RESONANZ-FILTER (SVF) PRO STIMME!
-    private val voiceSvfLow = FloatArray(4)
-    private val voiceSvfBand = FloatArray(4)
+    // Cytomic Linear Trapezoidal Integrated SVF (ZDF) States pro Stimme (ic1eq, ic2eq)
+    private val zdfIc1 = FloatArray(4)
+    private val zdfIc2 = FloatArray(4)
 
-    // Eigene ADSR- & Transienten-Hüllkurve pro Stimme
+    // Per-Voice ADSR Envelopes
     private val voiceStage = IntArray(4)
     private val voiceAmpEnv = FloatArray(4)
     private val voiceFltEnv = FloatArray(4)
@@ -546,35 +488,52 @@ class WolfChordEngine {
     private val voiceStrumWait = IntArray(4)
 
     private var bassPhase = 0f
-    private var lfoPhase = 0f
-    private var tremPhase = 0f
     private var pwmPhase = 0f
 
-    // 3-Phasen Solina/Juno BBD Ensemble Chorus
+    // Lo-Fi Vintage Tape Deck Processor (Modulated Fractional Tape Delay + Vinyl Dust + Head Rolloff)
+    private val tapeFlutterBufL = FloatArray(4096)
+    private val tapeFlutterBufR = FloatArray(4096)
+    private var tapeWritePos = 0
+    private var wowPhase = 0f
+    private var flutterPhase = 0f
+    private var tapeLpL = 0f
+    private var tapeLpR = 0f
+    private var vinylCrackleEnv = 0f
+
+    // 3-Phase BBD Stereo Ensemble Chorus
     private val bbdBufL = FloatArray(2048)
     private val bbdBufR = FloatArray(2048)
     private var bbdWritePos = 0
     private var bbdLfoSlow = 0f
     private var bbdLfoFast = 0f
 
-    // Stereo Schroeder Reverb
-    private val comb1 = FloatArray(1499)
-    private val comb2 = FloatArray(1693)
-    private val comb3 = FloatArray(1877)
-    private val comb4 = FloatArray(2053)
-    private var cPos1 = 0; private var cPos2 = 0; private var cPos3 = 0; private var cPos4 = 0
-    private val allpass1 = FloatArray(347)
-    private val allpass2 = FloatArray(223)
-    private var aPos1 = 0; private var aPos2 = 0
+    // Modulated Dattorro / FDN Studio Lush Reverb (Kein metallisches Klingen!)
+    private val revAp1 = FloatArray(347)
+    private val revAp2 = FloatArray(521)
+    private val revAp3 = FloatArray(733)
+    private var rap1 = 0; private var rap2 = 0; private var rap3 = 0
+    private val tankL1 = FloatArray(3119)
+    private val tankR1 = FloatArray(3463)
+    private val tankL2 = FloatArray(4217)
+    private val tankR2 = FloatArray(4591)
+    private var tl1 = 0; private var tr1 = 0; private var tl2 = 0; private var tr2 = 0
+    private var tankLpL = 0f; private var tankLpR = 0f
+    private var revModPhase = 0f
 
     // Stereo Ping-Pong Tape Delay
-    private val delayBufL = FloatArray(44100)
-    private val delayBufR = FloatArray(44100)
+    private val delayBufL = FloatArray(48000)
+    private val delayBufR = FloatArray(48000)
     private var delayWritePos = 0
+    private var delayLpL = 0f
+    private var delayLpR = 0f
 
     private var crushCounter = 0
     private var crushedL = 0f
     private var crushedR = 0f
+
+    // DC-Blocker am Master-Ausgang
+    private var dcInL = 0f; private var dcOutL = 0f
+    private var dcInR = 0f; private var dcOutR = 0f
 
     fun playChord(freqs: FloatArray, bassFreq: Float, retriggerAttack: Boolean) {
         for (i in 0..3) targetFreqs[i] = freqs[i]
@@ -598,10 +557,10 @@ class WolfChordEngine {
     fun applyAdsrMacro(mode: Int) {
         adsrMode = mode.coerceIn(0, 3)
         when (adsrMode) {
-            0 -> { attackMs = 6f; decayMs = 450f; sustainLevel = 0.80f; releaseMs = 300f }
-            1 -> { attackMs = 480f; decayMs = 950f; sustainLevel = 0.88f; releaseMs = 920f }
-            2 -> { attackMs = 1.2f; decayMs = 650f; sustainLevel = 0.0f; releaseMs = 280f }
-            3 -> { attackMs = 2.0f; decayMs = 1300f; sustainLevel = 0.14f; releaseMs = 400f }
+            0 -> { attackMs = 8f; decayMs = 550f; sustainLevel = 0.78f; releaseMs = 280f }
+            1 -> { attackMs = 450f; decayMs = 1200f; sustainLevel = 0.86f; releaseMs = 1050f }
+            2 -> { attackMs = 1.2f; decayMs = 580f; sustainLevel = 0.0f; releaseMs = 300f }
+            3 -> { attackMs = 2.5f; decayMs = 1500f; sustainLevel = 0.14f; releaseMs = 420f }
         }
         attackTriggerCount++
     }
@@ -616,19 +575,19 @@ class WolfChordEngine {
         filterWheel = preset.baseCutoff
         filterResonance = preset.filterResonance
         filterEnvAmount = preset.filterEnvAmount
-        vibratoDepth = preset.vibratoDepth
-        tremoloDepth = preset.tremoloDepth
+        unisonSpread = preset.unisonSpread
+        lofiAmount = preset.lofiAmount
         glideSpeed = preset.glideSpeed
-        reverbSend = preset.reverbSend
-        fxChorus = preset.ensembleOn
+        reverbMix = preset.reverbMix
+        fxChorus = preset.chorusOn
         fxDelay = preset.delayOn
+        lofiMode = preset.lofiOn
         for (v in 0..3) {
             val vp = preset.voices[v]
             voices[v].apply {
                 engine = vp.engine
                 fmRatioIndex = vp.fmRatioIndex
                 timbre = vp.timbre
-                morph = vp.morph
                 detuneCents = vp.detuneCents
                 octShift = vp.octShift
                 pan = vp.pan
@@ -641,16 +600,17 @@ class WolfChordEngine {
     fun snapshotToPreset(id: String, name: String): SynthPreset {
         val vData = (0..3).map { v ->
             val vc = voices[v]
-            VoicePresetData(vc.engine, vc.fmRatioIndex, vc.timbre, vc.morph, vc.detuneCents, vc.octShift, vc.pan, vc.level)
+            VoicePresetData(vc.engine, vc.fmRatioIndex, vc.timbre, vc.detuneCents, vc.octShift, vc.pan, vc.level)
         }
         return SynthPreset(
             id = id, name = name, category = "USER PATCH",
             adsrMode = adsrMode, attackMs = attackMs, decayMs = decayMs,
             sustainLevel = sustainLevel, releaseMs = releaseMs,
             baseCutoff = filterWheel, filterResonance = filterResonance,
-            filterEnvAmount = filterEnvAmount, vibratoDepth = vibratoDepth,
-            tremoloDepth = tremoloDepth, glideSpeed = glideSpeed,
-            reverbSend = reverbSend, ensembleOn = fxChorus, delayOn = fxDelay,
+            filterEnvAmount = filterEnvAmount, unisonSpread = unisonSpread,
+            lofiAmount = lofiAmount, glideSpeed = glideSpeed,
+            reverbMix = reverbMix, chorusOn = fxChorus,
+            delayOn = fxDelay, lofiOn = lofiMode,
             voices = vData, isUser = true
         )
     }
@@ -662,37 +622,36 @@ class WolfChordEngine {
         voiceStage[v] = 1
         voiceFltEnv[v] = 1.0f
         voiceTineEnv[v] = 1.0f
-        // Analog-Drift pro Anschlag leicht variieren -> verhindert jeden Phasen-Lock!
-        voiceDrift[v] = 1f + (Random.nextFloat() - 0.5f) * 0.0016f
+        val driftAmt = if (lofiMode) 0.0045f else 0.0012f
+        analogDrift[v] = 1f + (Random.nextFloat() - 0.5f) * driftAmt
 
-        // Karplus-Strong Delay-Line mit gefiltertem Hammer-/Zupf-Impuls füllen
         val period = (sampleRate / freq.coerceAtLeast(35f)).toInt().coerceIn(16, 1024)
         val line = ksDelayLines[v]
         var smoothNoise = 0f
-        val brightness = voices[v].timbre.coerceIn(0.15f, 0.98f)
+        val brightness = voices[v].timbre.coerceIn(0.20f, 0.96f)
         for (idx in 0 until period) {
             val pos = (ksWritePos[v] - idx + line.size) % line.size
             val rawN = (Random.nextFloat() * 2f - 1f)
             val bodyWave = sin(idx.toFloat() / period.toFloat() * 2f * PI.toFloat())
-            smoothNoise += brightness * ((rawN * 0.7f + bodyWave * 0.5f) - smoothNoise)
+            smoothNoise += brightness * ((rawN * 0.65f + bodyWave * 0.55f) - smoothNoise)
             line[pos] = smoothNoise
         }
-        ksExciteRemaining[v] = (sampleRate * 0.0035f).toInt() // 3.5ms Pick/Hammer Burst
+        ksExciteRemaining[v] = (sampleRate * 0.003f).toInt()
     }
 
     @Synchronized
     fun start() {
         if (isRunning) return
         isRunning = true
-        audioThread = thread(start = true, isDaemon = true, name = "WolfChordAudioThread") {
-            val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT).coerceAtLeast(2048)
+        audioThread = thread(start = true, isDaemon = true, name = "HiChordProAudioThread") {
+            val minBufSize = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_FLOAT).coerceAtLeast(2048)
             val track = AudioTrack.Builder()
                 .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_GAME).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
-                .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
+                .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_STEREO).build())
                 .setBufferSizeInBytes(minBufSize).setTransferMode(AudioTrack.MODE_STREAM).build()
 
             val framesPerBlock = 256
-            val stereoBuffer = ShortArray(framesPerBlock * 2)
+            val floatStereoBuffer = FloatArray(framesPerBlock * 2)
             track.play()
 
             var sampleCounter = 0
@@ -701,6 +660,7 @@ class WolfChordEngine {
             var arpVoice = 0
             val pingPongOrder = intArrayOf(0, 1, 2, 3, 2, 1)
             var lastHandledAttackCount = attackTriggerCount
+            val hyperSawOffsets = floatArrayOf(-0.019f, -0.011f, -0.0045f, 0.0f, 0.0048f, 0.0115f, 0.0195f)
 
             while (isRunning) {
                 val currentBpm = bpm.coerceIn(60, 200)
@@ -709,19 +669,20 @@ class WolfChordEngine {
                 val delaySamples = (sixteenthSamples * 3).coerceIn(1000, delayBufL.size - 1)
                 val currentGlide = glideSpeed.coerceIn(0.0005f, 0.095f)
 
-                val attSamples = (attackMs * 0.001f * sampleRate).coerceAtLeast(10f)
+                val attSamples = (attackMs * 0.001f * sampleRate).coerceAtLeast(12f)
                 val attackStep = 1f / attSamples
                 val decSamples = (decayMs * 0.001f * sampleRate).coerceAtLeast(250f)
                 val decayMul = 0.001f.pow(1f / decSamples)
                 val relSamples = (releaseMs * 0.001f * sampleRate).coerceAtLeast(180f)
                 val releaseMul = 0.001f.pow(1f / relSamples)
-                val fltDecayMul = 0.001f.pow(1f / (decSamples * 0.38f))
-                val tineDecayMul = 0.001f.pow(1f / (sampleRate * 0.14f)) // Schneller 140ms Tine-Decay für Rhodes/Bells!
+                val fltDecayMul = 0.001f.pow(1f / (decSamples * 0.36f))
+                val tineDecayMul = 0.001f.pow(1f / (sampleRate * 0.13f))
                 val targetSustain = if (adsrMode == 2) 0.0f else sustainLevel.coerceIn(0f, 1f)
 
-                val wheelNorm = filterWheel.coerceIn(0.06f, 1.0f)
-                val baseF = 0.035f + wheelNorm * wheelNorm * 0.56f
-                val svfQ = (0.88f - filterResonance.coerceIn(0f, 0.65f)).coerceIn(0.26f, 0.88f)
+                // Cytomic ZDF SVF Resonanz-Dämpfung k = 2 - 2*res
+                val zdfK = (2.0f - 1.75f * filterResonance.coerceIn(0f, 0.88f)).coerceIn(0.22f, 2.0f)
+                val spreadAmt = unisonSpread.coerceIn(0.05f, 1.0f)
+                val twoPi = 2f * PI.toFloat()
 
                 if (syncResetRequested) {
                     syncResetRequested = false
@@ -734,16 +695,14 @@ class WolfChordEngine {
                     sampleCounter++
                     beatSampleCounter = (beatSampleCounter + 1) % quarterSamples
 
-                    lfoPhase = (lfoPhase + 5.2f / sampleRate) % 1f
-                    tremPhase = (tremPhase + 4.4f / sampleRate) % 1f
-                    pwmPhase = (pwmPhase + 0.9f / sampleRate) % 1f
-                    bbdLfoSlow = (bbdLfoSlow + 0.58f / sampleRate) % 1f
-                    bbdLfoFast = (bbdLfoFast + 5.6f / sampleRate) % 1f
+                    pwmPhase = (pwmPhase + 0.82f / sampleRate) % 1f
+                    bbdLfoSlow = (bbdLfoSlow + 0.55f / sampleRate) % 1f
+                    bbdLfoFast = (bbdLfoFast + 5.4f / sampleRate) % 1f
+                    revModPhase = (revModPhase + 0.72f / sampleRate) % 1f
+                    wowPhase = (wowPhase + 0.52f / sampleRate) % 1f
+                    flutterPhase = (flutterPhase + 6.4f / sampleRate) % 1f
 
-                    val vibratoFactor = 1f + sin(lfoPhase * 2f * PI.toFloat()) * vibratoDepth
-                    val pwmMod = sin(pwmPhase * 2f * PI.toFloat()) * 0.35f
-                    val tremL = 1f - tremoloDepth * 0.45f * (0.5f + 0.5f * sin(tremPhase * 2f * PI.toFloat()))
-                    val tremR = 1f - tremoloDepth * 0.45f * (0.5f - 0.5f * sin(tremPhase * 2f * PI.toFloat()))
+                    val pwmMod = sin(pwmPhase * twoPi) * 0.36f
 
                     if (sampleCounter >= sixteenthSamples) {
                         sampleCounter = 0
@@ -766,8 +725,7 @@ class WolfChordEngine {
                     val currentTrig = attackTriggerCount
                     if (currentTrig != lastHandledAttackCount) {
                         lastHandledAttackCount = currentTrig
-                        // Natürliches Mikro-Strumming (3.5ms) oder Gitarren-Strum (32ms)
-                        val strumStepSamples = if (strumMode) (sampleRate * 0.032f).toInt() else (sampleRate * 0.0035f).toInt()
+                        val strumStepSamples = if (strumMode) (sampleRate * 0.032f).toInt() else (sampleRate * 0.0025f).toInt()
                         for (v in 0..3) {
                             voiceStrumWait[v] = v * strumStepSamples
                             if (voiceStrumWait[v] == 0) {
@@ -787,25 +745,20 @@ class WolfChordEngine {
 
                         val aEnv = voiceAmpEnv[0]
                         activeEnvSum = aEnv
-                        if (aEnv > 0.0003f) {
+                        if (aEnv > 0.0002f) {
                             val vc = voices[arpVoice]
                             val octMult = 2f.pow(vc.octShift.toFloat())
-                            val rawTarget = targetFreqs[arpVoice] * octMult * 2f.pow(vc.detuneCents / 1200f) * vibratoFactor
+                            val rawTarget = targetFreqs[arpVoice] * octMult * 2f.pow((vc.detuneCents * spreadAmt) / 1200f) * analogDrift[0]
                             if (rawTarget > 20f) {
                                 if (arpSmoothFreq <= 20f) arpSmoothFreq = rawTarget
                                 arpSmoothFreq += (rawTarget - arpSmoothFreq) * (currentGlide * 1.8f)
 
-                                val rawSig = computeChordMachineVoice(0, vc, arpSmoothFreq, aEnv, voiceFltEnv[0], voiceTineEnv[0], pwmMod)
-                                // Eigenes 2-Pol SVF Filter für den Arpeggiator
-                                val fCut = (baseF + voiceFltEnv[0] * filterEnvAmount * 0.55f).coerceIn(0.03f, 0.78f)
-                                voiceSvfLow[0] += fCut * voiceSvfBand[0]
-                                val high = rawSig - voiceSvfLow[0] - svfQ * voiceSvfBand[0]
-                                voiceSvfBand[0] += fCut * high
-                                val filtered = voiceSvfLow[0]
+                                val rawSig = renderStudioVoice(0, vc, arpSmoothFreq, aEnv, voiceFltEnv[0], voiceTineEnv[0], pwmMod, spreadAmt, hyperSawOffsets)
+                                val filtered = processCytomicZdfLowpass(0, rawSig, arpSmoothFreq, voiceFltEnv[0], zdfK)
 
-                                val panNorm = ((vc.pan + 1f) * 0.5f).coerceIn(0f, 1f)
-                                mixL += filtered * sqrt(1f - panNorm) * 1.35f
-                                mixR += filtered * sqrt(panNorm) * 1.35f
+                                val panNorm = ((vc.pan * spreadAmt + 1f) * 0.5f).coerceIn(0f, 1f)
+                                mixL += filtered * cos(panNorm * PI.toFloat() * 0.5f) * 1.35f
+                                mixR += filtered * sin(panNorm * PI.toFloat() * 0.5f) * 1.35f
                             }
                         }
                     } else {
@@ -826,46 +779,35 @@ class WolfChordEngine {
 
                             val aEnv = voiceAmpEnv[v]
                             activeEnvSum += aEnv * 0.25f
-                            if (aEnv <= 0.0003f) continue
+                            if (aEnv <= 0.0002f) continue
 
                             val vc = voices[v]
                             val octMult = 2f.pow(vc.octShift.toFloat())
-                            val tFreq = targetFreqs[v] * octMult * 2f.pow(vc.detuneCents / 1200f) * vibratoFactor * voiceDrift[v]
+                            val tFreq = targetFreqs[v] * octMult * 2f.pow((vc.detuneCents * spreadAmt) / 1200f) * analogDrift[v]
                             if (tFreq <= 20f) continue
 
                             if (currentFreqs[v] <= 20f) currentFreqs[v] = tFreq
                             currentFreqs[v] += (tFreq - currentFreqs[v]) * currentGlide
                             val freq = currentFreqs[v]
 
-                            val rawSig = computeChordMachineVoice(v, vc, freq, aEnv, voiceFltEnv[v], voiceTineEnv[v], pwmMod)
+                            val rawSig = renderStudioVoice(v, vc, freq, aEnv, voiceFltEnv[v], voiceTineEnv[v], pwmMod, spreadAmt, hyperSawOffsets)
+                            val filtered = processCytomicZdfLowpass(v, rawSig, freq, voiceFltEnv[v], zdfK)
 
-                            // EIGENES 2-POL SVF FILTER PRO STIMME (mit Key-Tracking!)
-                            val keyTrack = ((freq - 220f) / 1600f).coerceIn(-0.05f, 0.18f)
-                            val fCut = (baseF + keyTrack + voiceFltEnv[v] * filterEnvAmount * 0.55f).coerceIn(0.03f, 0.78f)
-                            voiceSvfLow[v] += fCut * voiceSvfBand[v]
-                            val high = rawSig - voiceSvfLow[v] - svfQ * voiceSvfBand[v]
-                            voiceSvfBand[v] += fCut * high
-                            val filtered = voiceSvfLow[v]
-
-                            val panNorm = ((vc.pan + 1f) * 0.5f).coerceIn(0f, 1f)
-                            mixL += filtered * sqrt(1f - panNorm)
-                            mixR += filtered * sqrt(panNorm)
+                            val panNorm = ((vc.pan * spreadAmt + 1f) * 0.5f).coerceIn(0f, 1f)
+                            mixL += filtered * cos(panNorm * PI.toFloat() * 0.5f)
+                            mixR += filtered * sin(panNorm * PI.toFloat() * 0.5f)
                         }
                     }
 
-                    // Stereo Tremolo / Auto-Panning (Rhodes & Vibraphone)
-                    mixL *= tremL
-                    mixR *= tremR
-
-                    // Warm Analog Bass-Voice (OFF / ROOT / SLASH)
+                    // Warm Analog Sub-Bass Voice
                     if (bassMode > 0 && targetBassFreq > 20f && activeEnvSum > 0.001f) {
                         if (currentBassFreq <= 20f) currentBassFreq = targetBassFreq
                         currentBassFreq += (targetBassFreq - currentBassFreq) * (currentGlide * 1.5f)
                         val bDt = (currentBassFreq / sampleRate).coerceIn(0.0001f, 0.25f)
                         bassPhase = (bassPhase + bDt) % 1f
-                        val bSub = sin(bassPhase * 2f * PI.toFloat()) * 0.75f
-                        val bWarmSaw = ((2f * bassPhase - 1f) - polyBlep(bassPhase, bDt)) * 0.22f * baseF
-                        val bassSig = (bSub + bWarmSaw) * 0.20f * activeEnvSum
+                        val bSub = sin(bassPhase * twoPi) * 0.78f
+                        val bTri = (1f - 4f * abs(round(bassPhase - 0.25f) - (bassPhase - 0.25f))) * 0.25f
+                        val bassSig = (bSub + bTri) * 0.22f * activeEnvSum
                         mixL += bassSig
                         mixR += bassSig
                     }
@@ -880,89 +822,166 @@ class WolfChordEngine {
                     var finalL = mixL
                     var finalR = mixR
 
+                    // DEDIZIERTER LO-FI VINTAGE TAPE DECK PROCESSOR (Wow & Flutter + Tape Saturation + Vinyl Dust + Head Rolloff)
+                    tapeFlutterBufL[tapeWritePos] = finalL
+                    tapeFlutterBufR[tapeWritePos] = finalR
+                    if (lofiMode) {
+                        val lfAmt = lofiAmount.coerceIn(0.25f, 1.0f)
+                        val wowMod = (0.5f + 0.5f * sin(wowPhase * twoPi)) * 95f * lfAmt
+                        val flutMod = (0.5f + 0.5f * sin(flutterPhase * twoPi)) * 14f * lfAmt
+                        val totalDelay = (32f + wowMod + flutMod).coerceIn(4f, 4000f)
+                        val dInt = totalDelay.toInt()
+                        val dFrac = totalDelay - dInt
+
+                        val r1 = (tapeWritePos - dInt + tapeFlutterBufL.size) % tapeFlutterBufL.size
+                        val r2 = (r1 - 1 + tapeFlutterBufL.size) % tapeFlutterBufL.size
+                        val wL = tapeFlutterBufL[r1] * (1f - dFrac) + tapeFlutterBufL[r2] * dFrac
+                        val wR = tapeFlutterBufR[r1] * (1f - dFrac) + tapeFlutterBufR[r2] * dFrac
+
+                        // Warme asymmetrische Band-Sättigung + Analoger Höhen-Rolloff (3.2 kHz - 6 kHz)
+                        val satL = tanh(wL * (1.25f + lfAmt * 0.45f) + 0.04f * lfAmt) - 0.04f * lfAmt
+                        val satR = tanh(wR * (1.25f + lfAmt * 0.45f) - 0.04f * lfAmt) + 0.04f * lfAmt
+
+                        // Dezentes Vinyl-/Tape-Knistern
+                        if (Random.nextFloat() < 0.0012f * lfAmt) {
+                            vinylCrackleEnv = Random.nextFloat() * 0.025f * lfAmt
+                        }
+                        vinylCrackleEnv *= 0.92f
+                        val tapeHiss = ((Random.nextFloat() * 2f - 1f) * 0.0022f * lfAmt) + vinylCrackleEnv
+
+                        val lpCut = (0.42f - lfAmt * 0.22f).coerceIn(0.14f, 0.55f)
+                        tapeLpL += lpCut * ((satL + tapeHiss) - tapeLpL)
+                        tapeLpR += lpCut * ((satR + tapeHiss) - tapeLpR)
+                        finalL = tapeLpL
+                        finalR = tapeLpR
+                    }
+                    tapeWritePos = (tapeWritePos + 1) % tapeFlutterBufL.size
+
                     // 3-Phasen Solina/Juno BBD Ensemble Chorus
                     bbdBufL[bbdWritePos] = finalL
                     bbdBufR[bbdWritePos] = finalR
                     if (fxChorus) {
-                        val twoPi = 2f * PI.toFloat()
-                        val d1 = 280f + sin(bbdLfoSlow * twoPi) * 130f + sin(bbdLfoFast * twoPi) * 18f
-                        val d2 = 310f + sin((bbdLfoSlow + 0.333f) * twoPi) * 130f + sin((bbdLfoFast + 0.333f) * twoPi) * 18f
-                        val d3 = 340f + sin((bbdLfoSlow + 0.666f) * twoPi) * 130f + sin((bbdLfoFast + 0.666f) * twoPi) * 18f
+                        val d1 = 290f + sin(bbdLfoSlow * twoPi) * 135f + sin(bbdLfoFast * twoPi) * 16f
+                        val d2 = 325f + sin((bbdLfoSlow + 0.333f) * twoPi) * 135f + sin((bbdLfoFast + 0.333f) * twoPi) * 16f
+                        val d3 = 360f + sin((bbdLfoSlow + 0.666f) * twoPi) * 135f + sin((bbdLfoFast + 0.666f) * twoPi) * 16f
 
                         val r1 = (bbdWritePos - d1.toInt() + bbdBufL.size) % bbdBufL.size
                         val r2 = (bbdWritePos - d2.toInt() + bbdBufR.size) % bbdBufR.size
                         val r3 = (bbdWritePos - d3.toInt() + bbdBufL.size) % bbdBufL.size
 
-                        finalL = finalL * 0.68f + (bbdBufL[r1] + bbdBufR[r3] * 0.5f) * 0.38f
-                        finalR = finalR * 0.68f + (bbdBufR[r2] + bbdBufL[r3] * 0.5f) * 0.38f
+                        finalL = finalL * 0.70f + (bbdBufL[r1] + bbdBufR[r3] * 0.5f) * 0.38f
+                        finalR = finalR * 0.70f + (bbdBufR[r2] + bbdBufL[r3] * 0.5f) * 0.38f
                     }
                     bbdWritePos = (bbdWritePos + 1) % bbdBufL.size
 
                     if (fxPump) {
                         val beatPhase = beatSampleCounter.toFloat() / quarterSamples.toFloat()
-                        val pumpGain = (0.12f + 0.88f * beatPhase.pow(0.65f)).coerceIn(0.12f, 1f)
+                        val pumpGain = (0.10f + 0.90f * beatPhase.pow(0.65f)).coerceIn(0.10f, 1f)
                         finalL *= pumpGain; finalR *= pumpGain
                     }
 
                     if (fxCrush) {
                         crushCounter++
-                        if (crushCounter >= 9) {
+                        if (crushCounter >= 8) {
                             crushCounter = 0
-                            crushedL = round(finalL * 6f) / 6f
-                            crushedR = round(finalR * 6f) / 6f
+                            crushedL = round(finalL * 7f) / 7f
+                            crushedR = round(finalR * 7f) / 7f
                         }
                         finalL = crushedL; finalR = crushedR
                     }
 
+                    // Warm Filtered Ping-Pong Tape Delay
                     val readPos = (delayWritePos - delaySamples + delayBufL.size) % delayBufL.size
                     if (fxDelay) {
                         val dL = delayBufL[readPos]
                         val dR = delayBufR[readPos]
-                        finalL += dR * 0.38f
-                        finalR += dL * 0.38f
-                        delayBufL[delayWritePos] = (finalL * 0.56f).coerceIn(-1f, 1f)
-                        delayBufR[delayWritePos] = (finalR * 0.56f).coerceIn(-1f, 1f)
+                        delayLpL += 0.35f * (dR - delayLpL)
+                        delayLpR += 0.35f * (dL - delayLpR)
+                        finalL += delayLpL * 0.38f
+                        finalR += delayLpR * 0.38f
+                        delayBufL[delayWritePos] = (finalL * 0.54f).coerceIn(-1f, 1f)
+                        delayBufR[delayWritePos] = (finalR * 0.54f).coerceIn(-1f, 1f)
                     } else {
                         delayBufL[delayWritePos] = 0f
                         delayBufR[delayWritePos] = 0f
                     }
                     delayWritePos = (delayWritePos + 1) % delayBufL.size
 
-                    if (fxReverb && reverbSend > 0.01f) {
-                        val revIn = (finalL + finalR) * 0.5f * reverbSend
-                        val c1 = comb1[cPos1]; comb1[cPos1] = (revIn + c1 * 0.78f).coerceIn(-1f, 1f); cPos1 = (cPos1 + 1) % comb1.size
-                        val c2 = comb2[cPos2]; comb2[cPos2] = (revIn + c2 * 0.80f).coerceIn(-1f, 1f); cPos2 = (cPos2 + 1) % comb2.size
-                        val c3 = comb3[cPos3]; comb3[cPos3] = (revIn + c3 * 0.82f).coerceIn(-1f, 1f); cPos3 = (cPos3 + 1) % comb3.size
-                        val c4 = comb4[cPos4]; comb4[cPos4] = (revIn + c4 * 0.84f).coerceIn(-1f, 1f); cPos4 = (cPos4 + 1) % comb4.size
+                    // MODULATED DATTORRO STUDIO LUSH REVERB (Diffusions-Kaskade + LFO-modulierte Tank-Linien)
+                    if (fxReverb && reverbMix > 0.01f) {
+                        var diff = (finalL + finalR) * 0.5f * reverbMix
 
-                        val combSumL = (c1 + c3) * 0.32f
-                        val combSumR = (c2 + c4) * 0.32f
+                        // 3 Input Allpass-Diffusoren glätten jeden Anschlags-Impuls zu einer weichen Wolke
+                        val b1 = revAp1[rap1]; val o1 = -0.7f * diff + b1; revAp1[rap1] = diff + 0.7f * o1; rap1 = (rap1 + 1) % revAp1.size; diff = o1
+                        val b2 = revAp2[rap2]; val o2 = -0.7f * diff + b2; revAp2[rap2] = diff + 0.7f * o2; rap2 = (rap2 + 1) % revAp2.size; diff = o2
+                        val b3 = revAp3[rap3]; val o3 = -0.65f * diff + b3; revAp3[rap3] = diff + 0.65f * o3; rap3 = (rap3 + 1) % revAp3.size; diff = o3
 
-                        val ap1Buf = allpass1[aPos1]
-                        val ap1Out = -combSumL + ap1Buf
-                        allpass1[aPos1] = (combSumL + ap1Buf * 0.5f).coerceIn(-1f, 1f)
-                        aPos1 = (aPos1 + 1) % allpass1.size
+                        val modOffset = (sin(revModPhase * twoPi) * 24f).toInt()
+                        val rIdxL1 = (tl1 - (tankL1.size - 35 + modOffset) + tankL1.size) % tankL1.size
+                        val rIdxR1 = (tr1 - (tankR1.size - 35 - modOffset) + tankR1.size) % tankR1.size
 
-                        val ap2Buf = allpass2[aPos2]
-                        val ap2Out = -combSumR + ap2Buf
-                        allpass2[aPos2] = (combSumR + ap2Buf * 0.5f).coerceIn(-1f, 1f)
-                        aPos2 = (aPos2 + 1) % allpass2.size
+                        val tOutL1 = tankL1[rIdxL1]
+                        val tOutR1 = tankR1[rIdxR1]
+                        val tOutL2 = tankL2[tl2]
+                        val tOutR2 = tankR2[tr2]
 
-                        finalL += ap1Out * 0.42f
-                        finalR += ap2Out * 0.42f
+                        // High-Frequency Damping im Hall-Tank (warmer Ausklang wie Valhalla VintageVerb)
+                        tankLpL += 0.38f * (tOutR2 - tankLpL)
+                        tankLpR += 0.38f * (tOutL2 - tankLpR)
+
+                        val decay = (0.72f + reverbMix * 0.16f).coerceIn(0.65f, 0.89f)
+                        tankL1[tl1] = (diff + tankLpL * decay).coerceIn(-1.2f, 1.2f); tl1 = (tl1 + 1) % tankL1.size
+                        tankR1[tr1] = (diff + tankLpR * decay).coerceIn(-1.2f, 1.2f); tr1 = (tr1 + 1) % tankR1.size
+                        tankL2[tl2] = (tOutL1 * decay).coerceIn(-1.2f, 1.2f); tl2 = (tl2 + 1) % tankL2.size
+                        tankR2[tr2] = (tOutR1 * decay).coerceIn(-1.2f, 1.2f); tr2 = (tr2 + 1) % tankR2.size
+
+                        val wetL = (tOutL1 + tOutL2 * 0.8f) * 0.36f
+                        val wetR = (tOutR1 + tOutR2 * 0.8f) * 0.36f
+                        finalL += wetL
+                        finalR += wetR
                     }
 
-                    val outL = tanh(finalL * 1.15f)
-                    val outR = tanh(finalR * 1.15f)
+                    // DC-Blocker & Master Analog Soft-Limiter
+                    val cleanL = finalL - dcInL + 0.995f * dcOutL; dcInL = finalL; dcOutL = cleanL
+                    val cleanR = finalR - dcInR + 0.995f * dcOutR; dcInR = finalR; dcOutR = cleanR
+
+                    val outL = tanh(cleanL * 1.15f) * 0.92f
+                    val outR = tanh(cleanR * 1.15f) * 0.92f
                     if (i < scopeBuffer.size) scopeBuffer[i] = (outL + outR) * 0.5f
 
-                    stereoBuffer[i * 2] = (outL * 30500f).toInt().toShort()
-                    stereoBuffer[i * 2 + 1] = (outR * 30500f).toInt().toShort()
+                    floatStereoBuffer[i * 2] = outL
+                    floatStereoBuffer[i * 2 + 1] = outR
                 }
-                track.write(stereoBuffer, 0, stereoBuffer.size)
+                track.write(floatStereoBuffer, 0, floatStereoBuffer.size, AudioTrack.WRITE_BLOCKING)
             }
             try { track.stop(); track.release() } catch (_: Exception) {}
         }
+    }
+
+    // Andy Simper (Cytomic) Zero-Delay Feedback (ZDF) Trapezoidal SVF Lowpass Filter
+    private fun processCytomicZdfLowpass(v: Int, input: Float, voiceFreq: Float, fltEnv: Float, k: Float): Float {
+        val wheelNorm = filterWheel.coerceIn(0.05f, 1.0f)
+        val envMod = fltEnv * filterEnvAmount * 0.48f
+        val cutoffNorm = (wheelNorm + envMod).coerceIn(0.05f, 0.98f)
+        // Logarithmische Frequenzskala von 90 Hz bis 16.500 Hz + Key-Tracking
+        val baseHz = 90f * (180f.pow(cutoffNorm)) + (voiceFreq * 0.35f)
+        val fc = baseHz.coerceIn(80f, 17500f)
+
+        val g = tan(PI.toFloat() * (fc / sampleRate)).coerceIn(0.002f, 1.25f)
+        val a1 = 1.0f / (1.0f + g * (g + k))
+        val a2 = g * a1
+        val a3 = g * a2
+
+        // Leichte Sättigung im Filter-Eingang für analoge Wärme
+        val v0 = tanh(input * 1.1f)
+        val v3 = v0 - zdfIc2[v]
+        val v1 = a1 * zdfIc1[v] + a2 * v3
+        val v2 = zdfIc2[v] + a2 * zdfIc1[v] + a3 * v3
+
+        zdfIc1[v] = 2.0f * v1 - zdfIc1[v]
+        zdfIc2[v] = 2.0f * v2 - zdfIc2[v]
+
+        return v2 // 12dB/Oct Zero-Delay Lowpass Output
     }
 
     private fun stepVoiceEnvelope(
@@ -984,7 +1003,7 @@ class WolfChordEngine {
             }
             2 -> {
                 voiceAmpEnv[v] = targetSustain + (voiceAmpEnv[v] - targetSustain) * decayMul
-                if (abs(voiceAmpEnv[v] - targetSustain) < 0.0006f) {
+                if (abs(voiceAmpEnv[v] - targetSustain) < 0.0005f) {
                     voiceAmpEnv[v] = targetSustain
                     voiceStage[v] = if (targetSustain <= 0.001f) 0 else 3
                 }
@@ -995,7 +1014,7 @@ class WolfChordEngine {
             }
             4 -> {
                 voiceAmpEnv[v] *= releaseMul
-                if (voiceAmpEnv[v] < 0.0003f) {
+                if (voiceAmpEnv[v] < 0.0002f) {
                     voiceAmpEnv[v] = 0f
                     voiceStage[v] = 0
                 }
@@ -1005,15 +1024,17 @@ class WolfChordEngine {
         voiceTineEnv[v] *= tineDecayMul
     }
 
-    // --- DIE 8 CHORD-MACHINE / DAISY-SP SYNTHESE-ALGORITHMEN ---
-    private fun computeChordMachineVoice(
+    // --- 6 KOHÄRENTE STUDIO-SYNTHESE-ENGINES ---
+    private fun renderStudioVoice(
         v: Int,
         vc: VoiceConfig,
         freq: Float,
         ampEnv: Float,
         fltEnv: Float,
         tineEnv: Float,
-        pwmLfo: Float
+        pwmMod: Float,
+        spreadAmt: Float,
+        hyperSawOffsets: FloatArray
     ): Float {
         val dt = (freq / sampleRate).coerceIn(0.0001f, 0.45f)
         val pArr = oscPhases[v]
@@ -1022,90 +1043,71 @@ class WolfChordEngine {
         val twoPi = 2f * PI.toFloat()
 
         val sig = when (vc.engine) {
-            0 -> { // VA_SAW: Dual Detuned PolyBLEP Analog Sawtooth
-                val spread = 1f + vc.morph * 0.0085f
-                val dt2 = (dt * spread).coerceIn(0.0001f, 0.45f)
+            0 -> { // CLEAN POLY: Warm PolyBLEP Saw + Triangle Foundation + Gentle Detune Pair (Perfekt für INIT NEUTRAL!)
+                val dt2 = (dt * (1f + 0.0032f * spreadAmt)).coerceIn(0.0001f, 0.45f)
                 pArr[1] = (pArr[1] + dt2) % 1f
-                val s1 = (2f * p0 - 1f) - polyBlep(p0, dt)
-                val s2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt2)
-                (s1 + s2 * 0.85f) * 0.55f
+                val saw1 = (2f * p0 - 1f) - polyBlep(p0, dt)
+                val saw2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt2)
+                val tri = 1f - 4f * abs(round(p0 - 0.25f) - (p0 - 0.25f))
+                val sawMix = 0.35f + vc.timbre * 0.55f
+                ((saw1 + saw2) * 0.5f * sawMix + tri * (1f - sawMix * 0.5f)) * 0.72f
             }
-            1 -> { // OCT_SAW: Chord Machine Octave-Saw + Detuned Pair
-                val dtOct = (dt * 2.002f).coerceIn(0.0001f, 0.45f)
-                val dtSub = (dt * 0.994f).coerceIn(0.0001f, 0.45f)
-                pArr[1] = (pArr[1] + dtOct) % 1f
-                pArr[2] = (pArr[2] + dtSub) % 1f
-                val sMain = (2f * p0 - 1f) - polyBlep(p0, dt)
-                val sOct = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dtOct)
-                val sWarm = (2f * pArr[2] - 1f) - polyBlep(pArr[2], dtSub)
-                (sMain * 0.50f + sWarm * 0.45f + sOct * vc.morph * 0.45f) * 0.65f
-            }
-            2 -> { // VA_PWM: Variable Pulse Width + Sub-Triangle
-                val pw = (0.5f + pwmLfo * vc.timbre).coerceIn(0.12f, 0.88f)
+            1 -> { // JUNO PWM: Classic Roland Juno-60 Simultaneous Saw + Modulated Pulse + Sub-Oscillator
+                val pw = (0.5f + pwmMod * (0.4f + vc.timbre * 0.5f)).coerceIn(0.12f, 0.88f)
                 var pulse = if (p0 < pw) 1f else -1f
                 pulse += polyBlep(p0, dt)
                 pulse -= polyBlep((p0 + 1f - pw) % 1f, dt)
 
-                val dt2 = (dt * 1.0045f).coerceIn(0.0001f, 0.45f)
-                pArr[1] = (pArr[1] + dt2) % 1f
-                val saw2 = (2f * pArr[1] - 1f) - polyBlep(pArr[1], dt2)
-                (pulse * 0.65f + saw2 * vc.morph * 0.45f) * 0.70f
+                val saw = (2f * p0 - 1f) - polyBlep(p0, dt)
+                pArr[1] = (pArr[1] + dt * 0.5f) % 1f
+                val sub = sin(pArr[1] * twoPi) * 0.35f
+                (pulse * 0.52f + saw * 0.48f + sub) * 0.68f
             }
-            3 -> { // FM1_EP: Rhodes / DX7 E-Piano (1:1 Warm Bark + Separate 1:7/1:14 Tine Bell!)
+            2 -> { // HYPERSAW: True 7-Oscillator Detuned SuperSaw Cluster (Für Rage, Trap & Wide Pads)
+                var sum = 0f
+                val detScale = 0.35f + vc.timbre * 0.85f
+                for (s in 0..6) {
+                    val sDt = (dt * (1f + hyperSawOffsets[s] * detScale)).coerceIn(0.0001f, 0.45f)
+                    if (s > 0) pArr[s] = (pArr[s] + sDt) % 1f
+                    val ps = pArr[s]
+                    val weight = if (s == 3) 1.0f else 0.65f
+                    sum += ((2f * ps - 1f) - polyBlep(ps, sDt)) * weight
+                }
+                sum * 0.24f
+            }
+            3 -> { // DX TINE EP: Authentic Rhodes Mk1 Electric Piano (Warm 1:1 Bark + Separate Decaying Tine Bell)
                 val ratio = fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
                 modPhases[v] = (modPhases[v] + dt * ratio) % 1f
                 tinePhases[v] = (tinePhases[v] + dt * 7.0f) % 1f
 
-                // Bark/Body: Modulations-Index ist nur beim Anschlag hoch und wird sofort warm
-                val bodyIndex = vc.timbre * (0.25f + 1.85f * fltEnv)
-                val bodyMod = sin(modPhases[v] * twoPi) * bodyIndex
-                val bodyCarrier = sin(p0 * twoPi + bodyMod)
+                val barkIdx = (0.18f + vc.timbre * 1.4f) * (0.25f + 0.75f * fltEnv)
+                val barkMod = sin(modPhases[v] * twoPi) * barkIdx
+                val carrier = sin(p0 * twoPi + barkMod)
 
-                // Rhodes Tine: Inharmonischer Oberton mit kurzem 140ms Tine-Decay
-                val tineBell = sin(tinePhases[v] * twoPi) * tineEnv * vc.morph * 0.55f
-                (bodyCarrier * 0.85f + tineBell)
+                // Kurzer Tine-Glocken-Anschlag (verschwindet nach 130ms -> null Orgel-Klang!)
+                val tine = sin(tinePhases[v] * twoPi + barkMod * 0.4f) * tineEnv * (0.22f + vc.timbre * 0.35f)
+                (carrier * 0.86f + tine)
             }
-            4 -> { // FM2_MALLET: Inharmonic Vibraphone / Marimba Modal Resonator
-                // Nutzt ungerade/inharmonische Verhältnisse (1 : 3.5 oder 1 : 4) wie echte Metall-/Holz-Klangplatten
-                val ratio = if (vc.fmRatioIndex == 3) 3.5f else 4.0f
+            4 -> { // MODAL BELL: Glassy / Dark Trap Bell Resonator (1:2 / 1:3.5 + Crisp Mallet Transient)
+                val ratio = if (vc.fmRatioIndex == 3) 3.5f else fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
                 modPhases[v] = (modPhases[v] + dt * ratio) % 1f
-                tinePhases[v] = (tinePhases[v] + dt * 9.2f) % 1f
+                tinePhases[v] = (tinePhases[v] + dt * 5.4f) % 1f
 
-                val modIdx = vc.timbre * fltEnv * 3.2f
+                val modIdx = (0.25f + vc.timbre * 2.2f) * fltEnv
                 val modSig = sin(modPhases[v] * twoPi) * modIdx
-                val fundamental = sin(p0 * twoPi + modSig)
-                val strikeTransient = sin(tinePhases[v] * twoPi) * tineEnv * tineEnv * 0.45f
-                (fundamental * 0.85f + strikeTransient)
+                val body = sin(p0 * twoPi + modSig)
+                val malletStrike = sin(tinePhases[v] * twoPi) * tineEnv * tineEnv * 0.38f
+                (body * 0.85f + malletStrike)
             }
-            5 -> { // FM3_BELL: Lush Shimmer / Glass FM Pad & Bell
-                val ratio = fmRatios[vc.fmRatioIndex.coerceIn(0, fmRatios.lastIndex)]
-                modPhases[v] = (modPhases[v] + dt * ratio) % 1f
-                pArr[1] = (pArr[1] + dt * 1.003f) % 1f
-                val modIdx = vc.timbre * (0.35f + 0.65f * fltEnv) * 2.6f
-                val mod = sin(modPhases[v] * twoPi) * modIdx
-                val c1 = sin(p0 * twoPi + mod)
-                val c2 = sin(pArr[1] * twoPi - mod * 0.7f)
-                (c1 + c2) * 0.55f
-            }
-            6 -> { // KS_STRING: ECHTE KARPLUS-STRONG WAVEGUIDE STRING (Harp, Guitar, Clavinet)
-                stepKarplusStrong(v, freq, stringDamping = 0.25f + vc.morph * 0.70f, pickHardness = vc.timbre)
-            }
-            else -> { // HAMMER_PNO: Multi-String Acoustic Piano (Karplus-Strong + Hammer-Thump + Unison-String)
-                val ksMain = stepKarplusStrong(v, freq, stringDamping = 0.65f + vc.morph * 0.30f, pickHardness = vc.timbre)
-                // Zweite minimal verstimmte Klaviersaite (Bicord/Tricord Schwebung)
-                val dt2 = (dt * 1.0009f).coerceIn(0.0001f, 0.45f)
-                pArr[1] = (pArr[1] + dt2) % 1f
-                val soundboard = sin(p0 * twoPi + sin(pArr[1] * twoPi) * 0.6f * fltEnv) * 0.40f
-                val hammerThump = sin(p0 * twoPi * 0.5f) * tineEnv * tineEnv * 0.35f
-                (ksMain * 0.78f + soundboard + hammerThump)
+            else -> { // KARPLUS STR: Physical Waveguide Plucked String (Harp, Guitar & Acoustic Piano)
+                stepKarplusStrong(v, freq, brightness = vc.timbre)
             }
         }
 
-        return sig * 0.24f * vc.level * ampEnv
+        return sig * 0.25f * vc.level * ampEnv
     }
 
-    // Echter physikalischer Karplus-Strong Saiten-Algorithmus mit linearer Phasen-Interpolation
-    private fun stepKarplusStrong(v: Int, freq: Float, stringDamping: Float, pickHardness: Float): Float {
+    private fun stepKarplusStrong(v: Int, freq: Float, brightness: Float): Float {
         val line = ksDelayLines[v]
         val wPos = ksWritePos[v]
 
@@ -1117,18 +1119,16 @@ class WolfChordEngine {
         val rPos2 = (rPos1 - 1 + line.size) % line.size
         val delayedSample = line[rPos1] * (1f - frac) + line[rPos2] * frac
 
-        // One-Pole Tiefpass in der Rückkopplungsschleife: Hohe Frequenzen verklingen schneller als tiefe (wie bei einer echten Saite!)
-        val lpCoeff = (0.35f + pickHardness * 0.58f).coerceIn(0.25f, 0.94f)
+        val lpCoeff = (0.35f + brightness * 0.58f).coerceIn(0.25f, 0.94f)
         ksLpState[v] += lpCoeff * (delayedSample - ksLpState[v])
 
         var excite = 0f
         if (ksExciteRemaining[v] > 0) {
             ksExciteRemaining[v]--
-            excite = (Random.nextFloat() * 2f - 1f) * pickHardness * 0.35f
+            excite = (Random.nextFloat() * 2f - 1f) * (0.25f + brightness * 0.35f)
         }
 
-        val fb = (0.986f + stringDamping * 0.0125f).coerceIn(0.982f, 0.9988f)
-        val newSample = (ksLpState[v] * fb + excite).coerceIn(-1.5f, 1.5f)
+        val newSample = (ksLpState[v] * 0.9945f + excite).coerceIn(-1.5f, 1.5f)
         line[wPos] = newSample
         ksWritePos[v] = (wPos + 1) % line.size
 
@@ -1142,7 +1142,7 @@ class WolfChordEngine {
     }
 }
 
-// --- MUSIKTHEORIE: WOLFPUNK CHORD MACHINE INVERSIONS + MAJOR/MINOR + 8-WAY JOYSTICK ---
+// --- MUSIKTHEORIE: DUR (MAJOR) & MOLL (MINOR) + INVERSIONS + 8-WEGE JOYSTICK ---
 val rootNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
 val majorScaleOffsets = intArrayOf(0, 2, 4, 5, 7, 9, 11)
@@ -1161,8 +1161,7 @@ data class ChordVoicingResult(
     val bassFreq: Float
 )
 
-// inversionMode: 0 = AUTO V-LEAD, 1 = ROOT (Inv 0), 2 = 1ST INV (Inv 1), 3 = 2ND INV (Inv 2)
-fun buildWolfChordVoicing(
+fun buildHiChordVoicing(
     keyIndex: Int,
     isMinorScale: Boolean,
     degree: Int,
@@ -1233,9 +1232,8 @@ fun buildWolfChordVoicing(
         rootMidiBase + fourthNote
     )
 
-    // Wolfpunk Chord Machine Inversion & Voice-Leading Engine
     when (inversionMode) {
-        0 -> { // AUTO VOICE-LEADING (Hält alle Noten eng um C4..G4 zusammen)
+        0 -> { // AUTO VOICE-LEADING (Hält alle Akkordtöne butterweich im selben Stimmführungs-Fenster)
             val centerTarget = 64 + (octaveShift * 12)
             for (i in 0..3) {
                 while (midiNotes[i] - centerTarget > 6) midiNotes[i] -= 12
@@ -1243,11 +1241,11 @@ fun buildWolfChordVoicing(
             }
             midiNotes.sort()
         }
-        2 -> { // 1ST INVERSION (Grundton eine Oktave hoch)
+        2 -> {
             midiNotes[0] += 12
             midiNotes.sort()
         }
-        3 -> { // 2ND INVERSION (Grundton + Terz eine Oktave hoch)
+        3 -> {
             midiNotes[0] += 12
             midiNotes[1] += 12
             midiNotes.sort()
@@ -1273,9 +1271,9 @@ fun buildWolfChordVoicing(
 }
 
 @Composable
-fun TeHiChordApp(synth: WolfChordEngine) {
+fun TeHiChordApp(synth: HiChordProEngine) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("hichord_presets", Context.MODE_PRIVATE) }
+    val prefs = remember { context.getSharedPreferences("hichord_pro_presets", Context.MODE_PRIVATE) }
     val config = LocalConfiguration.current
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -1285,34 +1283,35 @@ fun TeHiChordApp(synth: WolfChordEngine) {
     var activeDegree by remember { mutableStateOf(-1) }
     var displayChord by remember { mutableStateOf("HI-CHORD") }
 
-    var inversionMode by remember { mutableStateOf(0) } // 0: V-LEAD, 1: INV 0, 2: INV 1, 3: INV 2
+    var inversionMode by remember { mutableStateOf(0) }
     var bassMode by remember { mutableStateOf(1) }
     var octaveShift by remember { mutableStateOf(0) }
     var holdLatch by remember { mutableStateOf(false) }
     var strumMode by remember { mutableStateOf(false) }
-    var filterWheel by remember { mutableStateOf(0.62f) }
+    var filterWheel by remember { mutableStateOf(0.65f) }
 
-    var waveIndex by remember { mutableStateOf(3) }
-    var adsrMode by remember { mutableStateOf(3) }
+    var waveIndex by remember { mutableStateOf(0) }
+    var adsrMode by remember { mutableStateOf(0) }
     var arpMode by remember { mutableStateOf(0) }
     var activeSlot by remember { mutableStateOf(0) }
     var uiRefreshCounter by remember { mutableStateOf(0) }
 
     val userPresets = remember {
         val list = mutableStateListOf<SynthPreset>()
-        val rawSet = prefs.getStringSet("user_presets_v6", emptySet()) ?: emptySet()
+        val rawSet = prefs.getStringSet("user_presets_pro_v1", emptySet()) ?: emptySet()
         rawSet.mapNotNull { SynthPreset.deserialize(it) }
             .sortedBy { it.name }
             .forEach { list.add(it) }
         list
     }
 
+    // 4 Schnellwahl-Slots: Startet mit dem ehrlichen, neutralen "INIT NEUTRAL" Preset auf Slot 1!
     val slotPresets = remember {
         mutableStateListOf(
-            factoryPresets[0],  // FM E-PIANO
-            factoryPresets[2],  // DELICATE HARP (Karplus-Strong)
-            factoryPresets[4],  // WARM PAD
-            factoryPresets[7]   // OCTAVE SAW
+            factoryPresets[0],  // Slot 1: INIT NEUTRAL (Default Clean Poly)
+            factoryPresets[1],  // Slot 2: HICHORD KEYS (Rhodes E-Piano)
+            factoryPresets[4],  // Slot 3: CLOUD CATHEDRAL (Cloudrap Shimmer Pad)
+            factoryPresets[5]   // Slot 4: OPIUM RAGE SAW (7-Osc Hypersaw)
         )
     }
 
@@ -1327,7 +1326,7 @@ fun TeHiChordApp(synth: WolfChordEngine) {
 
     fun saveUserPresetsToDisk() {
         val serialized = userPresets.map { it.serialize() }.toSet()
-        prefs.edit().putStringSet("user_presets_v6", serialized).apply()
+        prefs.edit().putStringSet("user_presets_pro_v1", serialized).apply()
     }
 
     var joyX by remember { mutableStateOf(0f) }
@@ -1337,7 +1336,7 @@ fun TeHiChordApp(synth: WolfChordEngine) {
     fun syncChordState(deg: Int, retriggerAttack: Boolean) {
         activeDegree = deg
         if (deg in 0..6) {
-            val res = buildWolfChordVoicing(keyIndex, isMinorScale, deg, octaveShift, activeJoyZone, inversionMode, bassMode)
+            val res = buildHiChordVoicing(keyIndex, isMinorScale, deg, octaveShift, activeJoyZone, inversionMode, bassMode)
             displayChord = res.displayName
             synth.playChord(res.voiceFreqs, res.bassFreq, retriggerAttack)
         } else {
@@ -1347,7 +1346,7 @@ fun TeHiChordApp(synth: WolfChordEngine) {
 
     LaunchedEffect(keyIndex, isMinorScale, octaveShift, activeJoyZone, inversionMode, bassMode) {
         if (activeDegree in 0..6) {
-            val res = buildWolfChordVoicing(keyIndex, isMinorScale, activeDegree, octaveShift, activeJoyZone, inversionMode, bassMode)
+            val res = buildHiChordVoicing(keyIndex, isMinorScale, activeDegree, octaveShift, activeJoyZone, inversionMode, bassMode)
             displayChord = res.displayName
             synth.playChord(res.voiceFreqs, res.bassFreq, retriggerAttack = false)
         }
@@ -1419,6 +1418,7 @@ fun TeHiChordApp(synth: WolfChordEngine) {
                 saveUserPresetsToDisk()
                 uiRefreshCounter++
             },
+            onSyncFilterWheel = { filterWheel = it },
             uiRefreshCounter = uiRefreshCounter,
             onParamChanged = { uiRefreshCounter++ },
             frameTick = frameTick,
@@ -1491,10 +1491,10 @@ fun TeHiChordApp(synth: WolfChordEngine) {
     }
 }
 
-// --- 90° QUERFORMAT: EXPERT 4-VOICE LAB & PRESET BROWSER ---
+// --- 90° QUERFORMAT: 3-TAB STUDIO WORKSTATION (SYNTH STUDIO / 4-VOICE LAB / PRESET BANK) ---
 @Composable
 fun TeExpertLandscapeScreen(
-    synth: WolfChordEngine,
+    synth: HiChordProEngine,
     keyIndex: Int,
     isMinorScale: Boolean,
     activeDegree: Int,
@@ -1508,13 +1508,16 @@ fun TeExpertLandscapeScreen(
     onAssignPresetToSlot: (SynthPreset, Int) -> Unit,
     onSaveNewUserPreset: () -> Unit,
     onDeleteUserPreset: (SynthPreset) -> Unit,
+    onSyncFilterWheel: (Float) -> Unit,
     uiRefreshCounter: Int,
     onParamChanged: () -> Unit,
     frameTick: Int,
     displayChord: String
 ) {
     val view = LocalView.current
-    var showBrowser by remember { mutableStateOf(false) }
+    // 0 = SYNTH STUDIO (Cohesive Patch Editor), 1 = 4-VOICE LAB (Per-Voice Mixer), 2 = PRESET BANK
+    var labPage by remember { mutableStateOf(0) }
+    val pageNames = listOf("MODE: STUDIO", "MODE: 4-VOICE", "MODE: PRESETS")
     val voiceTitles = listOf("V1 // ROOT", "V2 // 3RD", "V3 // 5TH", "V4 // 7TH")
     val romanDegrees = if (isMinorScale) minorRomanDegrees else majorRomanDegrees
     val scaleOffsets = if (isMinorScale) minorScaleOffsets else majorScaleOffsets
@@ -1531,6 +1534,7 @@ fun TeExpertLandscapeScreen(
             .padding(10.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
+        // 1. TOP BAR: OLED + 4 QUICK SLOTS + PAGE SWITCHER + SAVE
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1553,7 +1557,7 @@ fun TeExpertLandscapeScreen(
                 ) {
                     Column {
                         Text(
-                            text = if (showBrowser) "HICHORD PRESETS" else "CHORD MACHINE LAB",
+                            text = pageNames[labPage],
                             color = TeOrange,
                             fontSize = 8.sp,
                             fontWeight = FontWeight.Bold,
@@ -1601,24 +1605,23 @@ fun TeExpertLandscapeScreen(
             }
 
             TeTactileButton(
-                title = if (showBrowser) "VOICE LAB" else "PRESETS",
-                sub = "16 INSTRUMENTS",
-                modifier = Modifier.weight(0.78f),
+                title = when (labPage) { 0 -> "4-VOICES"; 1 -> "PRESETS"; else -> "STUDIO" },
+                sub = "SWITCH VIEW",
+                modifier = Modifier.weight(0.82f),
                 height = 44.dp,
-                bgColor = if (showBrowser) TeBlue else TeOchre,
-                shadowColor = if (showBrowser) TeBlueShadow else Color(0xFFA67621),
-                textColor = if (showBrowser) Color.White else TePanelDark,
-                ledOn = showBrowser,
+                bgColor = TeOchre,
+                shadowColor = Color(0xFFA67621),
+                textColor = TePanelDark,
                 onClick = {
                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    showBrowser = !showBrowser
+                    labPage = (labPage + 1) % 3
                 }
             )
 
             TeTactileButton(
                 title = "+ SAVE",
                 sub = "USER PATCH",
-                modifier = Modifier.weight(0.72f),
+                modifier = Modifier.weight(0.70f),
                 height = 44.dp,
                 bgColor = TeKeyDark,
                 shadowColor = TeKeyDarkShadow,
@@ -1630,222 +1633,298 @@ fun TeExpertLandscapeScreen(
             )
         }
 
-        if (showBrowser) {
-            val allPresets = remember(userPresets.size, refresh) {
-                userPresets + factoryPresets
-            }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(vertical = 6.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(TePanelDark)
-                    .border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp))
-                    .padding(8.dp)
-            ) {
+        // 2. MITTE: STUDIO MACRO EDITOR (Page 0) / 4-VOICE MIXER (Page 1) / PRESET BANK (Page 2)
+        when (labPage) {
+            0 -> {
+                val unused = refresh
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "LOAD INSTRUMENT INTO SLOT 0${activeSlot + 1} (KARPLUS-STRONG STRINGS, DX-FM, BBD ENSEMBLE, ANALOG)",
-                        color = Color(0xFF00E5FF),
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "USER PRESETS: ${userPresets.size}",
-                        color = TeOchre,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(allPresets, key = { it.id }) { preset ->
-                        val isLoadedInActiveSlot = slotPresets[activeSlot].id == preset.id
-                        Box(
-                            modifier = Modifier
-                                .height(54.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    when {
-                                        isLoadedInActiveSlot -> TeOrange
-                                        preset.isUser -> Color(0xFF16324A)
-                                        else -> Color(0xFF282826)
-                                    }
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isLoadedInActiveSlot) Color.White else Color(0xFF484844),
-                                    shape = RoundedCornerShape(6.dp)
-                                )
-                                .clickable {
+                    // Spalte 1: OSCILLATOR & UNISON (Steuert alle 4 Stimmen kohärent!)
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("01 // OSCILLATOR", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(TeOrange).clickable {
                                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                                    onAssignPresetToSlot(preset, activeSlot)
-                                }
-                                .padding(6.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.SpaceBetween
+                                    val nextEng = (synth.voices[0].engine + 1) % engineNames.size
+                                    synth.setGlobalWaveform(nextEng)
+                                    onParamChanged()
+                                }.padding(horizontal = 8.dp, vertical = 3.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = preset.category,
-                                        color = if (isLoadedInActiveSlot) Color.White else if (preset.isUser) Color(0xFF00E5FF) else TeOchre,
-                                        fontSize = 8.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                    if (preset.isUser) {
-                                        Box(
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .background(TeLedRed)
-                                                .clickable {
-                                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                                                    onDeleteUserPreset(preset)
-                                                }
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        ) {
-                                            Text(
-                                                text = "DELETE",
-                                                color = Color.White,
-                                                fontSize = 7.sp,
-                                                fontWeight = FontWeight.Black,
-                                                fontFamily = FontFamily.Monospace
-                                            )
-                                        }
-                                    }
-                                }
-                                Text(
-                                    text = preset.name,
-                                    color = Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = FontFamily.Monospace
-                                )
+                                Text("ENG: ${engineNames[synth.voices[0].engine]}", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                             }
+                        }
+                        TeBarSlider(
+                            label = "TIMBRE / BRIGHTNESS",
+                            valueText = "${(synth.voices[0].timbre * 100).roundToInt()}%",
+                            fraction = synth.voices[0].timbre,
+                            barColor = Color(0xFF00E5FF),
+                            onValueChange = {
+                                for (v in 0..3) synth.voices[v].timbre = it
+                                onParamChanged()
+                            }
+                        )
+                        TeBarSlider(
+                            label = "UNISON DETUNE & SPREAD",
+                            valueText = "${(synth.unisonSpread * 100).roundToInt()}%",
+                            fraction = synth.unisonSpread,
+                            barColor = TeOchre,
+                            onValueChange = { synth.unisonSpread = it; onParamChanged() }
+                        )
+                        TeBarSlider(
+                            label = "PORTAMENTO GLIDE",
+                            valueText = if (synth.glideSpeed < 0.008f) "LONG" else if (synth.glideSpeed < 0.025f) "MED" else "FAST",
+                            fraction = (1f - (synth.glideSpeed / 0.09f)).coerceIn(0.05f, 1f),
+                            barColor = TeOrange,
+                            onValueChange = {
+                                synth.glideSpeed = ((1f - it) * 0.085f).coerceIn(0.001f, 0.09f)
+                                onParamChanged()
+                            }
+                        )
+                    }
+
+                    // Spalte 2: ZDF ANALOG FILTER
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("02 // ZDF LADDER FILTER", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        TeBarSlider(
+                            label = "FILTER CUTOFF",
+                            valueText = "${(synth.filterWheel * 100).roundToInt()}%",
+                            fraction = synth.filterWheel,
+                            barColor = TeOrange,
+                            onValueChange = {
+                                synth.filterWheel = it
+                                synth.baseCutoff = it
+                                onSyncFilterWheel(it)
+                                onParamChanged()
+                            }
+                        )
+                        TeBarSlider(
+                            label = "RESONANCE (Q)",
+                            valueText = "${(synth.filterResonance * 100).roundToInt()}%",
+                            fraction = synth.filterResonance / 0.85f,
+                            barColor = Color(0xFF00E5FF),
+                            onValueChange = { synth.filterResonance = (it * 0.85f).coerceIn(0f, 0.85f); onParamChanged() }
+                        )
+                        TeBarSlider(
+                            label = "ENVELOPE PUNCH (ENV MOD)",
+                            valueText = "${(synth.filterEnvAmount * 100).roundToInt()}%",
+                            fraction = synth.filterEnvAmount,
+                            barColor = Color(0xFF4CAF50),
+                            onValueChange = { synth.filterEnvAmount = it; onParamChanged() }
+                        )
+                    }
+
+                    // Spalte 3: ADSR ENVELOPE
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("03 // ADSR ENVELOPE", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        TeBarSlider(
+                            label = "ATTACK TIME",
+                            valueText = "${synth.attackMs.roundToInt()}ms",
+                            fraction = (synth.attackMs / 800f).coerceIn(0f, 1f),
+                            barColor = Color(0xFF00E5FF),
+                            onValueChange = { synth.attackMs = (1.2f + it * 800f); onParamChanged() }
+                        )
+                        TeBarSlider(
+                            label = "DECAY TIME",
+                            valueText = "${synth.decayMs.roundToInt()}ms",
+                            fraction = (synth.decayMs / 2000f).coerceIn(0f, 1f),
+                            barColor = TeOchre,
+                            onValueChange = { synth.decayMs = (150f + it * 1850f); onParamChanged() }
+                        )
+                        TeBarSlider(
+                            label = "SUSTAIN LEVEL",
+                            valueText = "${(synth.sustainLevel * 100).roundToInt()}%",
+                            fraction = synth.sustainLevel,
+                            barColor = Color(0xFF4CAF50),
+                            onValueChange = {
+                                synth.sustainLevel = it
+                                synth.adsrMode = if (it < 0.03f) 2 else 0
+                                onParamChanged()
+                            }
+                        )
+                        TeBarSlider(
+                            label = "RELEASE TIME",
+                            valueText = "${synth.releaseMs.roundToInt()}ms",
+                            fraction = (synth.releaseMs / 1500f).coerceIn(0f, 1f),
+                            barColor = TeOrange,
+                            onValueChange = { synth.releaseMs = (80f + it * 1420f); onParamChanged() }
+                        )
+                    }
+
+                    // Spalte 4: LO-FI VINTAGE TAPE & DATTORRO SPACE
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text("04 // TAPE & SPACE", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (synth.lofiMode) TeOrange else Color(0xFF333333)).clickable {
+                                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                    synth.lofiMode = !synth.lofiMode
+                                    onParamChanged()
+                                }.padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(if (synth.lofiMode) "LO-FI: ON" else "LO-FI: OFF", color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                            }
+                        }
+                        TeBarSlider(
+                            label = "LO-FI TAPE WARBLE & AGE",
+                            valueText = "${(synth.lofiAmount * 100).roundToInt()}%",
+                            fraction = synth.lofiAmount,
+                            barColor = TeOrange,
+                            onValueChange = {
+                                synth.lofiAmount = it
+                                if (it > 0.08f) synth.lofiMode = true
+                                onParamChanged()
+                            }
+                        )
+                        TeBarSlider(
+                            label = "DATTORRO CLOUD REVERB",
+                            valueText = "${(synth.reverbMix * 100).roundToInt()}%",
+                            fraction = synth.reverbMix,
+                            barColor = Color(0xFF00E5FF),
+                            onValueChange = { synth.reverbMix = it; synth.fxReverb = it > 0.02f; onParamChanged() }
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TeTactileButton(
+                                title = "CHORUS", sub = "BBD", modifier = Modifier.weight(1f), height = 36.dp,
+                                bgColor = if (synth.fxChorus) TeBlue else TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = synth.fxChorus,
+                                onClick = { synth.fxChorus = !synth.fxChorus; onParamChanged() }
+                            )
+                            TeTactileButton(
+                                title = "DELAY", sub = "TAPE", modifier = Modifier.weight(1f), height = 36.dp,
+                                bgColor = if (synth.fxDelay) TeBlue else TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = synth.fxDelay,
+                                onClick = { synth.fxDelay = !synth.fxDelay; onParamChanged() }
+                            )
                         }
                     }
                 }
             }
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                for (v in 0..3) {
-                    val vc = synth.voices[v]
-                    val unused = refresh
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(TePanelDark)
-                            .border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp))
-                            .padding(8.dp),
-                        verticalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+            1 -> {
+                val unused = refresh
+                Row(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    for (v in 0..3) {
+                        val vc = synth.voices[v]
+                        Column(
+                            modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text(text = voiceTitles[v], color = Color(0xFF9E9C95), fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(Color(0xFF333333))
-                                        .clickable {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text(voiceTitles[v], color = Color(0xFF9E9C95), fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Box(
+                                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color(0xFF333333)).clickable {
                                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                             vc.octShift = when (vc.octShift) { -1 -> 0; 0 -> 1; else -> -1 }
                                             onParamChanged()
-                                        }
-                                        .padding(horizontal = 5.dp, vertical = 3.dp)
-                                ) {
-                                    Text(
-                                        text = "OCT:${if (vc.octShift >= 0) "+${vc.octShift}" else vc.octShift}",
-                                        color = TeOchre,
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace
-                                    )
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(TeOrange)
-                                        .clickable {
+                                        }.padding(horizontal = 5.dp, vertical = 3.dp)
+                                    ) {
+                                        Text("OCT:${if (vc.octShift >= 0) "+${vc.octShift}" else vc.octShift}", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                    }
+                                    Box(
+                                        modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(TeOrange).clickable {
                                             view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                             vc.engine = (vc.engine + 1) % engineNames.size
                                             onParamChanged()
+                                        }.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    ) {
+                                        Text(engineNames[vc.engine], color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                                    }
+                                }
+                            }
+                            TeBarSlider(label = "VOICE TIMBRE", valueText = "${(vc.timbre * 100).roundToInt()}%", fraction = vc.timbre, barColor = Color(0xFF00E5FF), onValueChange = { vc.timbre = it; onParamChanged() })
+                            TeBarSlider(label = "DETUNE", valueText = "${if (vc.detuneCents >= 0) "+${vc.detuneCents}" else vc.detuneCents}ct", fraction = (vc.detuneCents + 50f) / 100f, barColor = TeOchre, onValueChange = { vc.detuneCents = ((it * 100f) - 50f).roundToInt(); onParamChanged() })
+                            val panInt = (vc.pan * 100).roundToInt()
+                            val panLabel = when { panInt < -5 -> "L${-panInt}"; panInt > 5 -> "R$panInt"; else -> "CTR" }
+                            TeBarSlider(label = "STEREO PAN", valueText = panLabel, fraction = (vc.pan + 1f) * 0.5f, barColor = TeOrange, onValueChange = { vc.pan = (it * 2f) - 1f; onParamChanged() })
+                            TeBarSlider(label = "VOICE LEVEL", valueText = "${(vc.level * 100).roundToInt()}%", fraction = vc.level, barColor = Color(0xFF4CAF50), onValueChange = { vc.level = it; onParamChanged() })
+                        }
+                    }
+                }
+            }
+            else -> {
+                val allPresets = remember(userPresets.size, refresh) {
+                    userPresets + factoryPresets
+                }
+                Column(
+                    modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 6.dp).clip(RoundedCornerShape(8.dp)).background(TePanelDark).border(1.5.dp, Color(0xFF3A3A38), RoundedCornerShape(8.dp)).padding(8.dp)
+                ) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("SELECT PRESET TO LOAD INTO SLOT 0${activeSlot + 1} (DEFAULT, HICHORD OG, LO-FI, CLOUDRAP, RAGE, TRAP)", color = Color(0xFF00E5FF), fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        Text("USER PATCHES: ${userPresets.size}", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                    }
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(4),
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(allPresets, key = { it.id }) { preset ->
+                            val isLoaded = slotPresets[activeSlot].id == preset.id
+                            Box(
+                                modifier = Modifier.height(54.dp).clip(RoundedCornerShape(6.dp))
+                                    .background(if (isLoaded) TeOrange else if (preset.isUser) Color(0xFF16324A) else Color(0xFF262624))
+                                    .border(1.dp, if (isLoaded) Color.White else Color(0xFF484844), RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                                        onAssignPresetToSlot(preset, activeSlot)
+                                    }.padding(6.dp)
+                            ) {
+                                Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                        Text(preset.category, color = if (isLoaded) Color.White else if (preset.isUser) Color(0xFF00E5FF) else TeOchre, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                                        if (preset.isUser) {
+                                            Box(
+                                                modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(TeLedRed).clickable {
+                                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                                    onDeleteUserPreset(preset)
+                                                }.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text("DELETE", color = Color.White, fontSize = 7.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                                            }
                                         }
-                                        .padding(horizontal = 6.dp, vertical = 3.dp)
-                                ) {
-                                    Text(text = engineNames[vc.engine], color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                                    }
+                                    Text(preset.name, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
                                 }
                             }
                         }
-                        TeBarSlider(label = "TIMBRE / BRIGHT", valueText = "${(vc.timbre * 100).roundToInt()}%", fraction = vc.timbre, barColor = Color(0xFF00E5FF), onValueChange = { vc.timbre = it; onParamChanged() })
-                        TeBarSlider(label = "MORPH / DAMPING", valueText = "${(vc.morph * 100).roundToInt()}%", fraction = vc.morph, barColor = TeBlue, onValueChange = { vc.morph = it; onParamChanged() })
-                        TeBarSlider(label = "DETUNE", valueText = "${if (vc.detuneCents >= 0) "+${vc.detuneCents}" else vc.detuneCents}ct", fraction = (vc.detuneCents + 50f) / 100f, barColor = TeOchre, onValueChange = { vc.detuneCents = ((it * 100f) - 50f).roundToInt(); onParamChanged() })
-                        val panInt = (vc.pan * 100).roundToInt()
-                        val panLabel = when { panInt < -5 -> "L${-panInt}"; panInt > 5 -> "R$panInt"; else -> "CTR" }
-                        TeBarSlider(label = "STEREO PAN", valueText = panLabel, fraction = (vc.pan + 1f) * 0.5f, barColor = TeOrange, onValueChange = { vc.pan = (it * 2f) - 1f; onParamChanged() })
-                        TeBarSlider(label = "VOICE LEVEL", valueText = "${(vc.level * 100).roundToInt()}%", fraction = vc.level, barColor = Color(0xFF4CAF50), onValueChange = { vc.level = it; onParamChanged() })
                     }
                 }
             }
         }
 
-        // 3. BOTTOM AUDITION STRIP
+        // 3. BOTTOM AUDITION KEYBOARD
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(46.dp),
+            modifier = Modifier.fillMaxWidth().height(46.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             TeTactileButton(
-                title = "HOLD",
-                sub = "LATCH",
-                modifier = Modifier.weight(0.95f),
-                height = 46.dp,
-                bgColor = if (holdLatch) TeBlue else TeKeyDark,
-                shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow,
-                textColor = Color.White,
-                ledOn = holdLatch,
-                onClick = {
-                    view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    onToggleHold()
-                }
+                title = "HOLD", sub = "LATCH", modifier = Modifier.weight(0.95f), height = 46.dp,
+                bgColor = if (holdLatch) TeBlue else TeKeyDark, shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = holdLatch,
+                onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleHold() }
             )
 
             var stripWidth by remember { mutableStateOf(1) }
             Row(
-                modifier = Modifier
-                    .weight(7f)
-                    .fillMaxHeight()
-                    .onSizeChanged { stripWidth = it.width.coerceAtLeast(1) }
+                modifier = Modifier.weight(7f).fillMaxHeight().onSizeChanged { stripWidth = it.width.coerceAtLeast(1) }
                     .pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
@@ -1854,7 +1933,6 @@ fun TeExpertLandscapeScreen(
                                 val normX = (x / stripWidth.toFloat()).coerceIn(0f, 0.999f)
                                 return (normX * 7f).toInt().coerceIn(0, 6)
                             }
-
                             var curDeg = mapXToDeg(down.position.x)
                             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                             currentOnTrigger(curDeg, true)
@@ -1885,36 +1963,12 @@ fun TeExpertLandscapeScreen(
                     val qualSuffix = when (scaleQuals[deg]) { 1 -> "m"; 2 -> "°"; else -> "" }
                     val isAct = activeDegree == deg
                     Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                            .padding(top = if (isAct) 2.dp else 0.dp)
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(if (isAct) TeOrangeShadow else TeKeyLightShadow)
-                            .padding(bottom = if (isAct) 1.dp else 3.dp)
+                        modifier = Modifier.weight(1f).fillMaxHeight().padding(top = if (isAct) 2.dp else 0.dp).clip(RoundedCornerShape(7.dp))
+                            .background(if (isAct) TeOrangeShadow else TeKeyLightShadow).padding(bottom = if (isAct) 1.dp else 3.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isAct) TeOrange else TeKeyLight)
-                                .padding(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = romanDegrees[deg],
-                                color = if (isAct) Color.White.copy(alpha = 0.8f) else Color(0xFF6E6D68),
-                                fontSize = 8.sp,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.align(Alignment.TopStart)
-                            )
-                            Text(
-                                text = "$noteLabel$qualSuffix",
-                                color = if (isAct) Color.White else TePanelDark,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.align(Alignment.BottomEnd)
-                            )
+                        Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).background(if (isAct) TeOrange else TeKeyLight).padding(horizontal = 6.dp, vertical = 3.dp)) {
+                            Text(romanDegrees[deg], color = if (isAct) Color.White.copy(alpha = 0.8f) else Color(0xFF6E6D68), fontSize = 8.sp, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.TopStart))
+                            Text("$noteLabel$qualSuffix", color = if (isAct) Color.White else TePanelDark, fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace, modifier = Modifier.align(Alignment.BottomEnd))
                         }
                     }
                 }
@@ -1951,10 +2005,10 @@ fun TeBarSlider(label: String, valueText: String, fraction: Float, barColor: Col
     }
 }
 
-// --- HOCHFORMAT: WOLFPUNK / HICHORD COMPANION INTERFACE ---
+// --- HOCHFORMAT: TE // HC-1 FIELD CHORD SYNTHESIZER ---
 @Composable
 fun TePortraitJamScreen(
-    synth: WolfChordEngine,
+    synth: HiChordProEngine,
     keyIndex: Int,
     onKeyChange: (Int) -> Unit,
     isMinorScale: Boolean,
@@ -1996,11 +2050,11 @@ fun TePortraitJamScreen(
     val tapTimes = remember { mutableStateListOf<Long>() }
 
     var fxDelay by remember(uiRefreshCounter) { mutableStateOf(synth.fxDelay) }
-    var fxCrush by remember(uiRefreshCounter) { mutableStateOf(synth.fxCrush) }
     var fxStutter by remember(uiRefreshCounter) { mutableStateOf(synth.fxStutter) }
     var fxChorus by remember(uiRefreshCounter) { mutableStateOf(synth.fxChorus) }
     var fxPump by remember(uiRefreshCounter) { mutableStateOf(synth.fxPump) }
     var fxReverb by remember(uiRefreshCounter) { mutableStateOf(synth.fxReverb) }
+    var lofiMode by remember(uiRefreshCounter) { mutableStateOf(synth.lofiMode) }
 
     val currentOnJoyChange by rememberUpdatedState(onJoyChange)
     val currentOnTrigger by rememberUpdatedState(onTriggerDegree)
@@ -2026,7 +2080,7 @@ fun TePortraitJamScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 1. HARDWARE HEADER + HICHORD FILTER WHEEL
+        // 1. HARDWARE HEADER + HICHORD TONE WHEEL
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -2035,7 +2089,7 @@ fun TePortraitJamScreen(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ScrewHead()
                 Text(
-                    text = "HICHORD // CHORD MACHINE (ROTATE 90° FOR LAB)",
+                    text = "TE // HC-1 FIELD CHORD SYNTH (ROTATE 90° FOR STUDIO)",
                     color = TePanelDark,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Black,
@@ -2045,7 +2099,7 @@ fun TePortraitJamScreen(
             var wheelW by remember { mutableStateOf(1) }
             Box(
                 modifier = Modifier
-                    .width(108.dp)
+                    .width(110.dp)
                     .height(18.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(TePanelDark)
@@ -2074,7 +2128,7 @@ fun TePortraitJamScreen(
                         .background(TeOrange)
                 )
                 Text(
-                    text = "TONE WHEEL ${(filterWheel * 100).roundToInt()}%",
+                    text = "CUTOFF ${(filterWheel * 100).roundToInt()}%",
                     color = Color.White,
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold,
@@ -2084,7 +2138,7 @@ fun TePortraitJamScreen(
             }
         }
 
-        // 2. OLED DISPLAY & 8-WEGE CHORD JOYSTICK
+        // 2. OLED DISPLAY & 8-WEGE HICHORD JOYSTICK
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2103,24 +2157,24 @@ fun TePortraitJamScreen(
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val cols = 16; val rows = 8
                     val stepX = size.width / cols; val stepY = size.height / rows
-                    for (c in 1 until cols) for (r in 1 until rows) drawCircle(Color(0xFF282826), 1.5f, Offset(c * stepX, r * stepY))
+                    for (c in 1 until cols) for (r in 1 until rows) drawCircle(Color(0xFF262624), 1.5f, Offset(c * stepX, r * stepY))
                 }
                 Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         val scaleName = if (isMinorScale) "${rootNames[keyIndex]}m" else rootNames[keyIndex]
                         DisplayBadge(text = "KEY $scaleName", bgColor = if (isMinorScale) TeBlue else TeOrange, textColor = Color.White)
-                        DisplayBadge(text = "$bpm BPM", bgColor = Color(0xFF2E2E2E), textColor = Color(0xFF00E5FF))
+                        DisplayBadge(text = "$bpm BPM", bgColor = Color(0xFF2B2B2B), textColor = Color(0xFF00E5FF))
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFF2E2E2E))
+                                .background(Color(0xFF2B2B2B))
                                 .clickable {
                                     view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                                     onCycleSlot()
                                 }
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            Text(text = "▸ ${activePresetName.take(10)}", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                            Text(text = "▸ ${activePresetName.take(11)}", color = TeOchre, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                         }
                     }
 
@@ -2129,10 +2183,10 @@ fun TePortraitJamScreen(
                             Text(
                                 text = when {
                                     activeJoyZone != JoyChordZone.CENTER -> "JOYSTICK // ${activeJoyZone.desc}"
-                                    activeDegree >= 0 -> "$activePresetCategory · ${if (isMinorScale) "MINOR" else "MAJOR"} · ${invLabels[inversionMode]}"
-                                    else -> "TAP PRESET OR ROTATE 90° FOR LAB"
+                                    lofiMode -> "$activePresetCategory · VINTAGE LO-FI TAPE"
+                                    else -> "$activePresetCategory · ${if (isMinorScale) "MINOR" else "MAJOR"} · ${invLabels[inversionMode]}"
                                 },
-                                color = if (activeJoyZone != JoyChordZone.CENTER) Color(0xFF00E5FF) else Color(0xFF888884),
+                                color = if (activeJoyZone != JoyChordZone.CENTER) Color(0xFF00E5FF) else if (lofiMode) TeOchre else Color(0xFF888884),
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = FontFamily.Monospace
@@ -2146,8 +2200,8 @@ fun TePortraitJamScreen(
                             )
                         }
                         Text(
-                            text = invLabels[inversionMode],
-                            color = TeOchre,
+                            text = if (lofiMode) "TAPE WARM" else invLabels[inversionMode],
+                            color = if (lofiMode) TeOrange else TeOchre,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace
@@ -2252,7 +2306,7 @@ fun TePortraitJamScreen(
             }
         }
 
-        // 3. SYSTEM, TONART, 1-BPM TEMPO, TAP-SYNC, WAVE, ADSR & ARP
+        // 3. SYSTEM, TONART, 1-BPM TEMPO, TAP-SYNC, ENGINE, ADSR & ARP
         SectionDivider("SYSTEM // KEY, 1-BPM TEMPO, TAP-SYNC, ENGINE, ADSR & ARP")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             TeTactileButton(title = "KEY -", sub = "ROOT", modifier = Modifier.weight(0.95f), height = 42.dp, bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onKeyChange((keyIndex + 11) % 12) })
@@ -2280,19 +2334,34 @@ fun TePortraitJamScreen(
             TeTactileButton(title = arpNames[arpMode], sub = "ARP", modifier = Modifier.weight(0.95f), height = 42.dp, bgColor = TeKeyDark, shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = arpMode > 0, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onArpChange((arpMode + 1) % arpNames.size) })
         }
 
-        // 4. PERFORMANCE FX + BBD ENSEMBLE, REVERB & SIDECHAIN PUMP
-        SectionDivider("PERFORMANCE FX // MOMENTARY FX + BBD ENSEMBLE, REVERB & PUMP")
+        // 4. PERFORMANCE FX + DEDICATED LO-FI VINTAGE ANALOG TAPE MODE!
+        SectionDivider("STUDIO FX // DEDICATED LO-FI TAPE MODE, BBD CHORUS, CLOUD REVERB & PUMP")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            TeMomentaryFxButton(title = "DELAY", sub = "ECHO", isPressed = fxDelay, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxDelay = true; synth.fxDelay = true }, onRelease = { fxDelay = false; synth.fxDelay = false })
-            TeMomentaryFxButton(title = "CRUSH", sub = "8-BIT", isPressed = fxCrush, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxCrush = true; synth.fxCrush = true }, onRelease = { fxCrush = false; synth.fxCrush = false })
-            TeMomentaryFxButton(title = "STUTTR", sub = "1/32", isPressed = fxStutter, modifier = Modifier.weight(1f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxStutter = true; synth.fxStutter = true }, onRelease = { fxStutter = false; synth.fxStutter = false })
-            TeTactileButton(title = "ENSEMB", sub = "3-BBD", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxChorus) TeOrange else TeBlue, shadowColor = if (fxChorus) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxChorus, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxChorus = !fxChorus; synth.fxChorus = fxChorus })
-            TeTactileButton(title = "REVERB", sub = "HALL", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxReverb) TeOrange else TeKeyDark, shadowColor = if (fxReverb) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = fxReverb, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxReverb = !fxReverb; synth.fxReverb = fxReverb })
+            // DEDIZIERTER LO-FI VINTAGE TAPE BUTTON
+            TeTactileButton(
+                title = "LO-FI",
+                sub = "TAPE AGE",
+                modifier = Modifier.weight(1.05f),
+                height = 44.dp,
+                bgColor = if (lofiMode) TeOrange else TeKeyDark,
+                shadowColor = if (lofiMode) TeOrangeShadow else TeKeyDarkShadow,
+                textColor = Color.White,
+                ledOn = lofiMode,
+                onClick = {
+                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    lofiMode = !lofiMode
+                    synth.lofiMode = lofiMode
+                }
+            )
+            TeMomentaryFxButton(title = "DELAY", sub = "ECHO", isPressed = fxDelay, modifier = Modifier.weight(0.95f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxDelay = true; synth.fxDelay = true }, onRelease = { fxDelay = false; synth.fxDelay = false })
+            TeMomentaryFxButton(title = "STUTTR", sub = "1/32", isPressed = fxStutter, modifier = Modifier.weight(0.95f), onPress = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxStutter = true; synth.fxStutter = true }, onRelease = { fxStutter = false; synth.fxStutter = false })
+            TeTactileButton(title = "CHORUS", sub = "JUNO", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxChorus) TeOrange else TeBlue, shadowColor = if (fxChorus) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxChorus, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxChorus = !fxChorus; synth.fxChorus = fxChorus })
+            TeTactileButton(title = "REVERB", sub = "CLOUD", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxReverb) TeOrange else TeKeyDark, shadowColor = if (fxReverb) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = fxReverb, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxReverb = !fxReverb; synth.fxReverb = fxReverb })
             TeTactileButton(title = "PUMP", sub = "DUCK", modifier = Modifier.weight(0.95f), height = 44.dp, bgColor = if (fxPump) TeOrange else TeBlue, shadowColor = if (fxPump) TeOrangeShadow else TeBlueShadow, textColor = Color.White, ledOn = fxPump, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); fxPump = !fxPump; synth.fxPump = fxPump })
         }
 
-        // 5. WOLFPUNK CHORD MACHINE MODES (DEDICATED MAJOR/MINOR, INVERSION, HOLD, STRUM, BASS, OCT)
-        SectionDivider("CHORD MACHINE CONTROLS // MAJOR/MINOR, INV 0-2, HOLD, STRUM & BASS")
+        // 5. HICHORD CONTROLS (DEDICATED MAJOR/MINOR, HOLD, STRUM, INVERSION, BASS, OCT)
+        SectionDivider("HICHORD CONTROLS // MAJOR/MINOR SCALE, HOLD, STRUM, VOICING & BASS")
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             TeTactileButton(
                 title = if (isMinorScale) "MINOR" else "MAJOR",
@@ -2309,7 +2378,7 @@ fun TePortraitJamScreen(
                 }
             )
             TeTactileButton(title = "HOLD", sub = "LATCH", modifier = Modifier.weight(0.9f), height = 46.dp, bgColor = if (holdLatch) TeBlue else TeKeyDark, shadowColor = if (holdLatch) TeBlueShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = holdLatch, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleHold() })
-            TeTactileButton(title = "STRUM", sub = "PLUCK", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (strumMode) TeOrange else TeKeyDark, shadowColor = if (strumMode) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = strumMode, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleStrum() })
+            TeTactileButton(title = "STRUM", sub = "CHORD", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (strumMode) TeOrange else TeKeyDark, shadowColor = if (strumMode) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = strumMode, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onToggleStrum() })
             TeTactileButton(title = invLabels[inversionMode], sub = "VOICING", modifier = Modifier.weight(0.95f), height = 46.dp, bgColor = if (inversionMode > 0) TeOrange else TeKeyDark, shadowColor = if (inversionMode > 0) TeOrangeShadow else TeKeyDarkShadow, textColor = Color.White, ledOn = true, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onCycleInversion() })
             TeTactileButton(title = bassLabels[bassMode], sub = "SUB-OSC", modifier = Modifier.weight(1.05f), height = 46.dp, bgColor = if (bassMode > 0) TeKeyDark else Color(0xFF3A3A38), shadowColor = TeKeyDarkShadow, textColor = Color.White, ledOn = bassMode > 0, onClick = { view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); onCycleBassMode() })
             TeTactileButton(
@@ -2328,8 +2397,8 @@ fun TePortraitJamScreen(
             )
         }
 
-        // 6. 7 DIATONIC CHORD BUTTONS (I - VII)
-        SectionDivider("DIATONIC CHORD KEYS // INSTANT TRIGGER & LEGATO SLIDE (I - VII)")
+        // 6. 7 DIATONIC CHORD KEYS (I - VII)
+        SectionDivider("NASHVILLE CHORD KEYS // INSTANT TRIGGER & LEGATO SLIDE (I - VII)")
         var padGridSize by remember { mutableStateOf(IntSize.Zero) }
 
         Column(
